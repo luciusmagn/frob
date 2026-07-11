@@ -152,7 +152,6 @@
                         (append
                          (list sbcl-command
                                "--noinform"
-                               "--disable-debugger"
                                "--core" core
                                "--end-runtime-options")
                          forwarded-arguments)
@@ -170,6 +169,7 @@
                    (status nil)
                    (capsule nil)
                    (forwarded nil)
+                   (original-arguments nil)
                    (remaining arguments))
                (loop while remaining
                      for argument = (pop remaining)
@@ -191,12 +191,21 @@
                            (setf capsule
                                  (or (pop remaining)
                                      (error "--capsule requires a pathname."))))
+                          ((string= argument "--original-argument")
+                           (push (or (pop remaining)
+                                     (error "--original-argument requires a value."))
+                                 original-arguments))
                           (t
                            (error "Unknown recovery option ~A. Put application arguments after --."
                                   argument))))
-               (values generation list-p status capsule forwarded)))
+               (values generation
+                       list-p
+                       status
+                       capsule
+                       forwarded
+                       (nreverse original-arguments))))
 
-           (report-crash (status capsule)
+           (report-crash (status capsule original-arguments)
              "Print bounded crash context before booting a retained generation."
              (when status
                (format *error-output* "Active Frob exited with status ~A.~%" status))
@@ -215,8 +224,12 @@
                  (error (condition)
                    (format *error-output* "Could not read crash capsule ~A: ~A~%"
                            capsule condition))))
+             (when original-arguments
+               (format *error-output* "Original arguments: ~S~%"
+                       original-arguments))
              nil))
-    (multiple-value-bind (generation list-p status capsule forwarded)
+    (multiple-value-bind
+        (generation list-p status capsule forwarded original-arguments)
         (parse-recovery-arguments recovery-arguments)
       (if list-p
           (list-generations)
@@ -227,7 +240,7 @@
             (unless (probe-file manifest-pathname)
               (error "No retained generation manifest exists at ~A."
                      manifest-pathname))
-            (report-crash status capsule)
+            (report-crash status capsule original-arguments)
             (boot-manifest (load-manifest manifest-pathname) forwarded))))))
   (error (condition)
     (format *error-output* "Recovery could not continue: ~A~%" condition)

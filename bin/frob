@@ -56,7 +56,9 @@ if [[ "$status" -ne 130 && "$status" -ne 143 ]]; then
   if [[ -n "$capsule" ]]; then
     recovery_arguments+=("--capsule" "$capsule")
   fi
-  recovery_arguments+=("--" "$@")
+  for argument in "$@"; do
+    recovery_arguments+=("--original-argument" "$argument")
+  done
   "$sbcl_command" --script "$source_root/recovery/launcher.lisp" \
     "$source_root" "${recovery_arguments[@]}"
   exit $?

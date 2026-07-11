@@ -438,6 +438,7 @@
 (-> checkpoint-resume-main () null)
 (defun checkpoint-resume-main ()
   "Run Frob's normal entry point when a retained core is booted."
+  (sb-ext:disable-debugger)
   (restart-case
       (main (uiop:command-line-arguments))
     (abort ()
