@@ -14,15 +14,10 @@
     :type boolean
     :documentation "Whether rendering is inside a fenced code block.")
    (code-line-number
-    :initform 1
+   :initform 1
     :accessor markdown-renderer-code-line-number
     :type (integer 1)
-    :documentation "The gutter number given to the next fenced code line.")
-   (continuation
-    :initform nil
-    :accessor markdown-renderer-continuation
-    :type list
-    :documentation "The prefix spans continuing a partially emitted logical line."))
+    :documentation "The gutter number given to the next fenced code line."))
   (:documentation
    "A line-oriented renderer turning a restrained markdown subset into styled rows."))
 
@@ -30,6 +25,17 @@
 (defun markdown-renderer-create (&key (width 80))
   "Create a markdown renderer wrapping rendered rows within WIDTH cells."
   (make-instance 'markdown-renderer :width (max 24 width)))
+
+(-> markdown--copy-renderer (markdown-renderer) markdown-renderer)
+(defun markdown--copy-renderer (renderer)
+  "Return an independent copy of RENDERER for speculative presentation."
+  (let ((copy (make-instance 'markdown-renderer
+                             :width (markdown-renderer-width renderer))))
+    (setf (markdown-renderer-code-open-p copy)
+          (markdown-renderer-code-open-p renderer)
+          (markdown-renderer-code-line-number copy)
+          (markdown-renderer-code-line-number renderer))
+    copy))
 
 
 ;;;; -- Inline Emphasis Spans --
@@ -52,26 +58,23 @@
          (not (char= (char text after) #\Space))
          (not (null (markdown--inline-close-position text after marker))))))
 
-(-> markdown--parse-inline (string) (values string vector vector))
+(-> markdown--parse-inline (string) (values string vector))
 (defun markdown--parse-inline (text)
-  "Return TEXT without inline markers plus per-character styles and source indices.
+  "Return TEXT without inline markers plus per-character styles.
 
 Recognizes `code`, **strong**, and *emphasis* spans whose delimiters pair
-within TEXT. Unpaired delimiters stay literal. The second value maps each
-rendered character to a style keyword and the third to its source index."
+within TEXT. Unpaired delimiters stay literal."
   (let ((rendered (make-array (length text)
                               :element-type 'character
                               :adjustable t
                               :fill-pointer 0))
         (styles (make-array (length text) :adjustable t :fill-pointer 0))
-        (sources (make-array (length text) :adjustable t :fill-pointer 0))
         (mode ':plain)
         (index 0))
     (labels ((emit ()
                "Copy the current source character with the active style."
                (vector-push-extend (char text index) rendered)
                (vector-push-extend mode styles)
-               (vector-push-extend index sources)
                (incf index))
 
              (marker-p (marker)
@@ -119,10 +122,12 @@ rendered character to a style keyword and the third to its source index."
                   (incf index))
                  (t
                   (emit)))))
-    (values (coerce rendered 'string) styles sources)))
+    (values (coerce rendered 'string) styles)))
 
-(-> markdown--style-runs (string vector integer integer) list)
-(defun markdown--style-runs (rendered styles start end)
+(-> markdown--style-runs
+    (string vector &key (:start integer) (:end integer))
+    list)
+(defun markdown--style-runs (rendered styles &key (start 0) (end (length rendered)))
   "Return spans for RENDERED between START and END grouped by equal style."
   (let ((spans nil)
         (run-start start))
@@ -139,15 +144,6 @@ rendered character to a style keyword and the third to its source index."
                            (subseq rendered run-start end))
             spans))
     (nreverse spans)))
-
-(-> markdown--style-marker (terminal-style) string)
-(defun markdown--style-marker (style)
-  "Return the source delimiter reopening STYLE in retained streaming text."
-  (case style
-    (:strong "**")
-    (:emphasis "*")
-    (:code "`")
-    (otherwise "")))
 
 
 ;;;; -- Line Classification --
@@ -238,22 +234,19 @@ rendered character to a style keyword and the third to its source index."
           (list (terminal-span ':dim "      │ "))))
 
 (-> markdown--wrapped-rows
-    (markdown-renderer string list list)
-    (values list list list))
-(defun markdown--wrapped-rows (renderer content first-prefix continuation-prefix)
-  "Return CONTENT's prefixed styled rows plus rendered start offsets and parse state.
-
-The second value gives each row's start offset within the rendered inline
-text, and the third value is the list (RENDERED STYLES SOURCES) from inline
-parsing, letting streaming callers map rendered offsets back to source text."
-  (multiple-value-bind (rendered styles sources)
+    (markdown-renderer string
+     &key (:first-prefix list) (:continuation-prefix list))
+    list)
+(defun markdown--wrapped-rows
+    (renderer content &key first-prefix continuation-prefix)
+  "Return CONTENT as wrapped, prefixed, styled transcript rows."
+  (multiple-value-bind (rendered styles)
       (markdown--parse-inline content)
     (let* ((prefix-width (max (terminal--spans-width first-prefix)
                               (terminal--spans-width continuation-prefix)))
            (content-width (max 8 (- (markdown-renderer-width renderer)
                                     prefix-width)))
            (rows nil)
-           (starts nil)
            (cursor 0))
       (loop for row-text in (terminal--wrap-text rendered content-width)
             for first-row-p = t then nil
@@ -265,25 +258,20 @@ parsing, letting streaming callers map rendered offsets back to source text."
                                    continuation-prefix)
                                (markdown--style-runs rendered
                                                      styles
-                                                     start
-                                                     (+ start
-                                                        (length row-text))))
+                                                     :start start
+                                                     :end (+ start
+                                                             (length row-text))))
                        rows)
-                 (push start starts)
                  (setf cursor (+ start (length row-text)))))
-      (values (nreverse rows)
-              (nreverse starts)
-              (list rendered styles sources)))))
+      (nreverse rows))))
 
-(-> markdown--code-rows (markdown-renderer string) (values list list))
+(-> markdown--code-rows (markdown-renderer string) list)
 (defun markdown--code-rows (renderer line)
-  "Return fenced code LINE as gutter-numbered rows plus rendered start offsets."
+  "Return fenced code LINE as gutter-numbered wrapped rows."
   (multiple-value-bind (first-prefix continuation-prefix)
       (markdown--code-prefixes renderer)
-    (let* ((continuation (markdown-renderer-continuation renderer))
-           (content-width (max 8 (- (markdown-renderer-width renderer) 8)))
+    (let* ((content-width (max 8 (- (markdown-renderer-width renderer) 8)))
            (rows nil)
-           (starts nil)
            (cursor 0))
       (loop for row-text in (terminal--wrap-text line content-width)
             for first-row-p = t then nil
@@ -291,16 +279,14 @@ parsing, letting streaming callers map rendered offsets back to source text."
                                 cursor
                                 (search row-text line :start2 cursor))))
                  (push (append (if first-row-p
-                                   (or continuation first-prefix)
+                                   first-prefix
                                    continuation-prefix)
                                (when (plusp (length row-text))
                                  (list (terminal-span ':plain row-text))))
                        rows)
-                 (push start starts)
                  (setf cursor (+ start (length row-text)))))
-      (unless continuation
-        (incf (markdown-renderer-code-line-number renderer)))
-      (values (nreverse rows) (nreverse starts)))))
+      (incf (markdown-renderer-code-line-number renderer))
+      (nreverse rows))))
 
 
 ;;;; -- Public Rendering Operations --
@@ -312,24 +298,14 @@ parsing, letting streaming callers map rendered offsets back to source text."
       (markdown--fence-line-p line)
     (cond
       ((and (markdown-renderer-code-open-p renderer) fence-p)
-       (setf (markdown-renderer-code-open-p renderer) nil
-             (markdown-renderer-continuation renderer) nil)
+       (setf (markdown-renderer-code-open-p renderer) nil)
        (list (list (terminal-span ':dim "  ```"))))
       ((markdown-renderer-code-open-p renderer)
-       (multiple-value-bind (rows starts)
-           (markdown--code-rows renderer line)
-         (declare (ignore starts))
-         (setf (markdown-renderer-continuation renderer) nil)
-         rows))
+       (markdown--code-rows renderer line))
       (fence-p
        (setf (markdown-renderer-code-open-p renderer) t
-             (markdown-renderer-code-line-number renderer) 1
-             (markdown-renderer-continuation renderer) nil)
+             (markdown-renderer-code-line-number renderer) 1)
        (list (list (terminal-span ':dim (format nil "  ```~A" language)))))
-      ((markdown-renderer-continuation renderer)
-       (let ((prefix (markdown-renderer-continuation renderer)))
-         (setf (markdown-renderer-continuation renderer) nil)
-         (markdown--wrapped-rows renderer line prefix prefix)))
       ((zerop (length (string-trim " " line)))
        (list nil))
       (t
@@ -337,70 +313,18 @@ parsing, letting streaming callers map rendered offsets back to source text."
            (markdown--line-layout line)
          (markdown--wrapped-rows renderer
                                  content
-                                 first-prefix
-                                 continuation-prefix))))))
+                                 :first-prefix first-prefix
+                                 :continuation-prefix continuation-prefix))))))
 
 (-> markdown-render-partial
     (markdown-renderer string)
     (values list list string))
 (defun markdown-render-partial (renderer partial)
-  "Return PARTIAL's overflow rows, its live tail row, and the retained source.
+  "Return no committed rows, PARTIAL's live tail, and all retained source.
 
-Rows for every completed wrapped row are returned for immediate transcript
-commitment, the tail row previews the unfinished remainder, and the retained
-source keeps unconsumed delimiters so later text continues correctly."
-  (block nil
-    (when (markdown-renderer-code-open-p renderer)
-      (when (and (null (markdown-renderer-continuation renderer))
-                 (uiop:string-prefix-p "```" partial))
-        (return (values nil
-                        (list (terminal-span ':dim
-                                             (format nil "  ~A" partial)))
-                        partial)))
-      (multiple-value-bind (rows starts)
-          (markdown--code-rows renderer partial)
-        (when (= (length rows) 1)
-          ;; Undo the speculative line number; the line has not committed yet.
-          (unless (markdown-renderer-continuation renderer)
-            (decf (markdown-renderer-code-line-number renderer)))
-          (return (values nil (first rows) partial)))
-        (multiple-value-bind (first-prefix continuation-prefix)
-            (markdown--code-prefixes renderer)
-          (declare (ignore first-prefix))
-          (setf (markdown-renderer-continuation renderer) continuation-prefix)
-          (return (values (butlast rows)
-                          (first (last rows))
-                          (subseq partial (first (last starts))))))))
-    (when (and (null (markdown-renderer-continuation renderer))
-               (uiop:string-prefix-p "```" partial))
-      (return (values nil
-                      (list (terminal-span ':dim
-                                           (format nil "  ~A" partial)))
-                      partial)))
-    (let ((continuation (markdown-renderer-continuation renderer)))
-      (multiple-value-bind (content first-prefix continuation-prefix)
-          (if continuation
-              (values partial continuation continuation)
-              (markdown--line-layout partial))
-        (multiple-value-bind (rows starts parse)
-            (markdown--wrapped-rows renderer content
-                                    first-prefix
-                                    continuation-prefix)
-          (when (<= (length rows) 1)
-            (return (values nil (first rows) partial)))
-          (destructuring-bind (rendered styles sources) parse
-            (declare (ignore rendered))
-            (let* ((retained-start (first (last starts)))
-                   (marker (markdown--style-marker
-                            (aref styles retained-start)))
-                   (source-start (aref sources retained-start))
-                   (source-offset (- (length partial) (length content))))
-              (setf (markdown-renderer-continuation renderer)
-                    continuation-prefix)
-              (values (butlast rows)
-                      (first (last rows))
-                      (concatenate 'string
-                                   marker
-                                   (subseq partial
-                                           (+ source-start
-                                              source-offset)))))))))))
+An unfinished logical line remains speculative even after it visually wraps.
+Later chunks may close inline delimiters and change every wrapped row, so only
+newline-terminated lines may become immutable transcript output."
+  (let* ((preview-renderer (markdown--copy-renderer renderer))
+         (preview-rows (markdown-render-line preview-renderer partial)))
+    (values nil (first (last preview-rows)) partial)))

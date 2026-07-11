@@ -139,16 +139,18 @@
                 (observer (application-agent-observer application))
                 (send-text (callback-agent-observer-text-callback observer))
                 (send-status (callback-agent-observer-status-callback observer))
-                (streamed-text "The quick brown fox jumps over the lazy dog"))
+                (streamed-text (format nil
+                                       "The quick brown fox jumps over~%the lazy dog")))
            (terminal-ui-start (application-ui application))
            (funcall send-status :provider-request-started nil)
-           (funcall send-text "The quick brown fox jumps ")
-           (funcall send-text "over the lazy dog")
+           (funcall send-text (format nil
+                                      "The quick brown fox jumps over~%"))
+           (funcall send-text "the lazy dog")
            (let ((streamed (recording-terminal-output terminal)))
              (test-assert (search "● frob" streamed)
                           "streaming opens a frob transcript block")
-             (test-assert (search "  The quick brown fox jumps" streamed)
-                          "completed wrapped lines commit while streaming"))
+             (test-assert (search "The quick brown fox" streamed)
+                          "newline-terminated logical lines commit while streaming"))
            (conversation-append-provider-item
             conversation
             (json-object
@@ -160,7 +162,7 @@
            (recording-terminal-reset terminal)
            (funcall send-status :provider-request-completed nil)
            (let ((completion (recording-terminal-output terminal)))
-             (test-assert (search "over the lazy dog" completion)
+             (test-assert (search "the lazy dog" completion)
                           "completing a request commits the fluid tail")
              (test-assert (not (search "● frob" completion))
                           "streamed message records do not render again"))
