@@ -391,6 +391,7 @@
     (test-lisp-worker-protocol)
     (test-self-tools)
     (test-generation-manifest)
+    (run-device-authentication-tests)
     (run-terminal-tests))
   (format t "~&~:D Frob tests passed.~%" *test-count*)
   t)

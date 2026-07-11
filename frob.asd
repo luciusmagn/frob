@@ -20,6 +20,7 @@
                              (:file "json")
                              (:file "configuration")
                              (:file "authentication")
+                             (:file "device-authentication")
                              (:file "conversation")
                              (:file "prompt")
                              (:file "provider")
@@ -37,6 +38,7 @@
   :components ((:module "tests"
                 :serial t
                 :components ((:file "tests")
+                             (:file "device-authentication-tests")
                              (:file "terminal-tests"))))
   :perform (asdf:test-op (operation component)
              (declare (ignore operation component))

@@ -45,7 +45,7 @@
 (defun padded-base64url (source)
   "Return SOURCE padded to a complete Base64 quartet."
   (let ((missing (mod (- 4 (mod (length source) 4)) 4)))
-    (concatenate 'string source (make-string missing :initial-element #\=))))
+    (concatenate 'string source (make-string missing :initial-element #\.))))
 
 (-> jwt-payload (string) (option json-object))
 (defun jwt-payload (token)
