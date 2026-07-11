@@ -232,6 +232,25 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-lisp-worker-protocol () null)
+(defun test-lisp-worker-protocol ()
+  "Test portable worker request execution and condition reporting."
+  (let ((success
+          (worker-handle-request
+           '(:request :id 1 :operation :eval :arguments (:form "(+ 20 22)"))))
+        (failure
+          (worker-handle-request
+           '(:request :id 2 :operation :eval :arguments (:form "(/ 1 0)")))))
+    (test-assert (eq (getf (rest success) :status) :ok)
+                 "the worker evaluates a valid request")
+    (test-assert (equal (getf (rest success) :values) '("42"))
+                 "the worker returns rendered values")
+    (test-assert (eq (getf (rest failure) :status) :error)
+                 "the worker turns evaluation conditions into protocol errors")
+    (test-assert (non-empty-string-p (getf (rest failure) :message))
+                 "worker protocol errors carry a readable condition report"))
+  nil)
+
 (-> run-tests () boolean)
 (defun run-tests ()
   "Run Frob's dependency-free unit tests and return true on success."
@@ -251,6 +270,7 @@
     (test-authentication-store)
     (test-provider-request)
     (test-provider-stream-decoding)
-    (test-tool-registry))
+    (test-tool-registry)
+    (test-lisp-worker-protocol))
   (format t "~&~:D Frob tests passed.~%" *test-count*)
   t)

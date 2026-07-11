@@ -23,7 +23,8 @@
                              (:file "conversation")
                              (:file "prompt")
                              (:file "provider")
-                             (:file "tools"))))
+                             (:file "tools")
+                             (:file "lisp-worker"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:frob/tests))))
 
 (asdf:defsystem #:frob/tests
