@@ -146,6 +146,7 @@
 (defun application-create (configuration &key conversation-id)
   "Create a connected application, loading CONVERSATION-ID when supplied."
   (configuration-ensure-directories configuration)
+  (durable-mutations-load configuration)
   (let* ((conversation (if conversation-id
                            (conversation-load-by-id configuration conversation-id)
                            (conversation-create configuration)))

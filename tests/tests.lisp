@@ -38,6 +38,21 @@
   (uiop:pathname-parent-directory-pathname
    (configuration-data-root configuration)))
 
+(-> test-configuration-for-source-root (pathname) configuration)
+(defun test-configuration-for-source-root (source-root)
+  "Return an isolated configuration whose tracked source is SOURCE-ROOT."
+  (let ((state-root (merge-pathnames ".frob-test-state/" source-root)))
+    (make-instance 'configuration
+                   :source-root source-root
+                   :working-directory source-root
+                   :data-root (merge-pathnames "data/" state-root)
+                   :state-root (merge-pathnames "state/" state-root)
+                   :cache-root (merge-pathnames "cache/" state-root)
+                   :codex-auth-path (merge-pathnames "missing-auth.json" state-root)
+                   :model +default-model+
+                   :reasoning-effort +default-reasoning-effort+
+                   :provider-endpoint +codex-responses-endpoint+)))
+
 (-> test-conversation-persistence () null)
 (defun test-conversation-persistence ()
   "Test append-only conversation projection and incomplete-tail recovery."
@@ -368,6 +383,222 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-durable-self-mutation () null)
+(defun test-durable-self-mutation ()
+  "Test checked live installation, source persistence, commit, and durable journaling."
+  (let* ((source-root
+           (uiop:ensure-directory-pathname
+            (merge-pathnames
+             (format nil "frob-durable-tests-~A/" (make-identifier))
+             (uiop:temporary-directory))))
+         (configuration (test-configuration-for-source-root source-root))
+         (source-pathname (merge-pathnames "src/definitions.lisp" source-root))
+         (previous-function (symbol-function 'test-self-target))
+         (active-check-count 0)
+         (source-check-count 0)
+         (checker
+           (make-instance
+            'callback-mutation-checker
+            :active-callback
+            (lambda (checked-configuration definition-source)
+              (declare (ignore checked-configuration definition-source))
+              (incf active-check-count)
+              (test-assert
+               (search "Return the durable baseline."
+                       (uiop:read-file-string source-pathname))
+               "active checks run before durable source replacement")
+              "active checks passed")
+            :source-callback
+            (lambda (checked-configuration paths)
+              (declare (ignore checked-configuration))
+              (incf source-check-count)
+              (test-assert (equal paths '("src/definitions.lisp"))
+                           "source checks receive normalized explicit paths")
+              (test-assert
+               (search "Return the durable value."
+                       (uiop:read-file-string source-pathname))
+               "source checks run after durable source replacement")
+              "source checks passed"))))
+    (unwind-protect
+         (progn
+           (ensure-directories-exist source-pathname)
+           (with-open-file (stream source-pathname
+                                   :direction :output
+                                   :if-exists :supersede
+                                   :if-does-not-exist :create
+                                   :external-format :utf-8)
+             (format stream
+                     "(in-package #:frob)~%~%(defun test-self-target () \"Return the durable baseline.\" 0)~%"))
+           (self-git-command configuration '("init" "--quiet"))
+           (self-git-command configuration '("config" "user.name" "Frob Test"))
+           (self-git-command configuration
+                             '("config" "user.email" "frob-test@example.invalid"))
+           (self-git-command configuration '("add" "src/definitions.lisp"))
+           (self-git-command configuration
+                             '("commit" "--quiet" "-m" "Create baseline"))
+           (let* ((conversation
+                    (conversation-create configuration :identifier "durable-mutation"))
+                  (context
+                    (make-instance 'tool-context
+                                   :configuration configuration
+                                   :worker nil
+                                   :conversation conversation
+                                   :mutation-checker checker))
+                  (failing-active-context
+                    (make-instance
+                     'tool-context
+                     :configuration configuration
+                     :worker nil
+                     :conversation conversation
+                     :mutation-checker
+                     (make-instance
+                      'callback-mutation-checker
+                      :active-callback
+                      (lambda (checked-configuration definition-source)
+                        (declare (ignore checked-configuration definition-source))
+                        (error "Injected active check failure."))
+                      :source-callback
+                      (lambda (checked-configuration paths)
+                        (declare (ignore checked-configuration paths))
+                        "unused"))))
+                  (registry (make-default-tool-registry))
+                  (persist-tool (tool-registry-find registry "self" "persist-definition"))
+                  (commit-tool (tool-registry-find registry "self" "commit"))
+                  (failed-persist-p
+                    (handler-case
+                        (progn
+                          (tool-execute
+                           persist-tool
+                           failing-active-context
+                           (json-object
+                            "definition"
+                            "(defun test-self-target () \"Return a rejected value.\" 13)"
+                            "pathname" "src/definitions.lisp"))
+                          nil)
+                      (error ()
+                        t)))
+                  (failed-persist-restored-p (= (test-self-target) 0))
+                  (failed-persist-source-unchanged-p
+                    (search "Return the durable baseline."
+                            (uiop:read-file-string source-pathname)))
+                  (persist-result
+                    (tool-execute
+                     persist-tool
+                     context
+                     (json-object
+                      "definition"
+                      "(defun test-self-target () \"Return the durable value.\" 84)"
+                      "pathname" "src/definitions.lisp")))
+                  (mutation
+                    (loop for value being the hash-values of *durable-mutations*
+                          when (and
+                                (string= (durable-mutation-target value)
+                                         (definition-key '(defun test-self-target () 84)))
+                                (eq (durable-mutation-phase value) :source-written))
+                            return value)))
+             (test-assert failed-persist-p
+                          "a failing active check rejects durable persistence")
+             (test-assert failed-persist-restored-p
+                          "a rejected durable definition restores the active definition")
+             (test-assert failed-persist-source-unchanged-p
+              "a rejected durable definition leaves source unchanged")
+             (test-assert (tool-result-success-p persist-result)
+                          "durable persistence succeeds after active checks")
+             (test-assert (= (test-self-target) 84)
+                          "durable persistence installs the live definition")
+             (test-assert (= active-check-count 1)
+                          "durable persistence runs active checks exactly once")
+             (test-assert mutation
+                          "durable persistence retains an explicit source-written transaction")
+             (let ((identifier (durable-mutation-identifier mutation)))
+               (clrhash *durable-mutations*)
+               (durable-mutations-load configuration)
+               (setf mutation (gethash identifier *durable-mutations*))
+               (test-assert
+                (and mutation
+                     (eq (durable-mutation-phase mutation) :source-written))
+                "pending durable state reconstructs from the append-only journal"))
+             (let* ((failing-source-context
+                      (make-instance
+                       'tool-context
+                       :configuration configuration
+                       :worker nil
+                       :conversation conversation
+                       :mutation-checker
+                       (make-instance
+                        'callback-mutation-checker
+                        :active-callback
+                        (lambda (checked-configuration definition-source)
+                          (declare (ignore checked-configuration definition-source))
+                          "unused")
+                        :source-callback
+                        (lambda (checked-configuration paths)
+                          (declare (ignore checked-configuration paths))
+                          (error "Injected source check failure.")))))
+                    (baseline-commit
+                      (string-trim
+                       '(#\Space #\Tab #\Newline #\Return)
+                       (self-git-command configuration '("rev-parse" "HEAD"))))
+                    (failed-commit-p
+                      (handler-case
+                          (progn
+                            (tool-execute
+                             commit-tool
+                             failing-source-context
+                             (json-object
+                              "title" "Reject durable test definition"
+                              "paths" (json-array "src/definitions.lisp")))
+                            nil)
+                        (error ()
+                          t)))
+                    (failed-commit-left-git-p
+                      (string= baseline-commit
+                               (string-trim
+                                '(#\Space #\Tab #\Newline #\Return)
+                                (self-git-command configuration
+                                                  '("rev-parse" "HEAD")))))
+                    (failed-commit-left-pending-p
+                      (eq (durable-mutation-phase mutation) :source-written))
+                    (commit-result
+                     (tool-execute
+                      commit-tool
+                      context
+                      (json-object
+                       "title" "Persist durable test definition"
+                       "paths" (json-array "src/definitions.lisp")))))
+               (test-assert failed-commit-p
+                            "a failing clean-source check rejects self.commit")
+               (test-assert failed-commit-left-git-p
+                "a rejected self.commit leaves Git unchanged")
+               (test-assert failed-commit-left-pending-p
+                            "a rejected self.commit leaves its transaction pending")
+               (test-assert (tool-result-success-p commit-result)
+                            "self.commit creates the explicit checked commit")
+               (test-assert (= source-check-count 1)
+                            "self.commit runs clean-source checks exactly once")
+               (test-assert (eq (durable-mutation-phase mutation) :durable)
+                            "self.commit marks the matching transaction durable")
+               (test-assert
+                (string= (durable-mutation-git-commit mutation)
+                         (string-trim
+                          '(#\Space #\Tab #\Newline #\Return)
+                          (self-git-command configuration '("rev-parse" "HEAD"))))
+                "the durable journal records the exact Git commit"))))
+      (setf (symbol-function 'test-self-target) previous-function)
+      (let ((test-identifiers nil))
+        (maphash
+         (lambda (identifier mutation)
+           (when (string= (durable-mutation-target mutation)
+                          (definition-key '(defun test-self-target () 0)))
+             (push identifier test-identifiers)))
+         *durable-mutations*)
+        (dolist (identifier test-identifiers)
+          (remhash identifier *durable-mutations*)))
+      (uiop:delete-directory-tree source-root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
 (-> run-tests () boolean)
 (defun run-tests ()
   "Run Frob's dependency-free unit tests and return true on success."
@@ -392,6 +623,7 @@
     (test-tool-registry)
     (test-lisp-worker-protocol)
     (test-self-tools)
+    (test-durable-self-mutation)
     (test-generation-manifest)
     (run-device-authentication-tests)
     (run-agent-tests)

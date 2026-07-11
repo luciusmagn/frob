@@ -115,6 +115,314 @@
         (finish-output stream)))
     entry))
 
+
+;;;; -- Durable Mutation Checks --
+
+(defclass mutation-checker ()
+  ()
+  (:documentation "A strategy for checking live and source mutation states."))
+
+(defclass standard-mutation-checker (mutation-checker)
+  ()
+  (:documentation "The production checker backed by ASDF and the repository check command."))
+
+(defclass callback-mutation-checker (mutation-checker)
+  ((active-callback
+    :initarg :active-callback
+    :reader callback-mutation-checker-active-callback
+    :type function
+    :documentation "The injected active-image check callback.")
+   (source-callback
+    :initarg :source-callback
+    :reader callback-mutation-checker-source-callback
+    :type function
+    :documentation "The injected clean-source check callback."))
+  (:documentation "A mutation checker backed by explicit boundary callbacks."))
+
+(-> mutation-checker-check-active
+    (mutation-checker configuration string)
+    string)
+(defgeneric mutation-checker-check-active (checker configuration definition-source)
+  (:documentation
+   "Check installed DEFINITION-SOURCE in the active image and return captured output."))
+
+(-> mutation-checker-check-source
+    (mutation-checker configuration list)
+    string)
+(defgeneric mutation-checker-check-source (checker configuration paths)
+  (:documentation
+   "Check the rebuildable source tree containing PATHS and return captured output."))
+
+(defmethod mutation-checker-check-active
+    ((checker standard-mutation-checker)
+     (configuration configuration)
+     (definition-source string))
+  "Run Frob's ASDF tests against the installed active-image definition."
+  (declare (ignore checker configuration definition-source))
+  (with-output-to-string (stream)
+    (let ((*standard-output* stream)
+          (*error-output* stream)
+          (*trace-output* stream))
+      (asdf:test-system :frob))))
+
+(defmethod mutation-checker-check-source
+    ((checker standard-mutation-checker)
+     (configuration configuration)
+     (paths list))
+  "Run the repository check command after source changes to PATHS."
+  (declare (ignore checker paths))
+  (let ((check-pathname
+          (merge-pathnames "check"
+                           (configuration-source-root configuration))))
+    (unless (probe-file check-pathname)
+      (error 'source-mutation-error
+             :message "The repository has no check command."
+             :tool-name "self.commit"
+             :pathname check-pathname))
+    (uiop:run-program (list (namestring check-pathname))
+                      :directory (configuration-source-root configuration)
+                      :output :string
+                      :error-output :output)))
+
+(defmethod mutation-checker-check-active
+    ((checker callback-mutation-checker)
+     (configuration configuration)
+     (definition-source string))
+  "Invoke CHECKER's injected active-image callback."
+  (or (funcall (callback-mutation-checker-active-callback checker)
+               configuration
+               definition-source)
+      ""))
+
+(defmethod mutation-checker-check-source
+    ((checker callback-mutation-checker)
+     (configuration configuration)
+     (paths list))
+  "Invoke CHECKER's injected clean-source callback."
+  (or (funcall (callback-mutation-checker-source-callback checker)
+               configuration
+               paths)
+      ""))
+
+(-> tool-context-effective-mutation-checker (tool-context) mutation-checker)
+(defun tool-context-effective-mutation-checker (context)
+  "Return CONTEXT's checker or a production checker when none was injected."
+  (or (tool-context-mutation-checker context)
+      (make-instance 'standard-mutation-checker)))
+
+
+;;;; -- Durable Mutation State --
+
+(defclass durable-mutation ()
+  ((identifier
+    :initarg :identifier
+    :reader durable-mutation-identifier
+    :type non-empty-string
+    :documentation "The stable identifier joining this mutation's journal records.")
+   (target
+    :initarg :target
+    :reader durable-mutation-target
+    :type non-empty-string
+    :documentation "The semantic definition signature being changed.")
+   (pathname
+    :initarg :pathname
+    :reader durable-mutation-pathname
+    :type non-empty-string
+    :documentation "The repository-relative source pathname being changed.")
+   (previous-source
+    :initarg :previous-source
+    :reader durable-mutation-previous-source
+    :type string
+    :documentation "The complete source definition preceding this mutation.")
+   (proposed-source
+    :initarg :proposed-source
+    :reader durable-mutation-proposed-source
+    :type string
+    :documentation "The complete proposed source definition.")
+   (phase
+    :initarg :phase
+    :accessor durable-mutation-phase
+    :type keyword
+    :documentation "The latest journaled transaction phase.")
+   (git-commit
+    :initform nil
+    :accessor durable-mutation-git-commit
+    :type (option string)
+    :documentation "The Git commit making the mutation durable, when complete."))
+  (:documentation "One checked live-to-source definition transaction."))
+
+(defvar *durable-mutations* (make-hash-table :test #'equal)
+  "Durable mutation transactions retained by the active Lisp image.")
+
+(-> durable-mutation-journal
+    (configuration durable-mutation &key (:detail t))
+    list)
+(defun durable-mutation-journal (configuration mutation &key detail)
+  "Append MUTATION's current phase and optional DETAIL to its journal."
+  (mutation-journal-append
+   configuration
+   (append
+    (list :mutation
+          :kind :durable-definition
+          :id (durable-mutation-identifier mutation)
+          :target (durable-mutation-target mutation)
+          :pathname (durable-mutation-pathname mutation)
+          :previous (durable-mutation-previous-source mutation)
+          :proposed (durable-mutation-proposed-source mutation)
+          :result (durable-mutation-phase mutation))
+    (when (durable-mutation-git-commit mutation)
+      (list :git-commit (durable-mutation-git-commit mutation)))
+    (when detail
+      (list :detail (bounded-string detail :limit 2000))))))
+
+(-> durable-mutation-transition
+    (configuration durable-mutation keyword &key (:detail t) (:git-commit (option string)))
+    durable-mutation)
+(defun durable-mutation-transition
+    (configuration mutation phase &key detail git-commit)
+  "Validate, apply, and journal MUTATION's transition to PHASE."
+  (let ((allowed
+          (case (durable-mutation-phase mutation)
+            (:pending '(:installed :failed :superseded))
+            (:installed '(:checked :failed :superseded))
+            (:checked '(:source-written :failed :superseded))
+            (:source-written '(:durable :failed :superseded))
+            (otherwise nil))))
+    (unless (member phase allowed :test #'eq)
+      (error 'source-mutation-error
+             :message (format nil "Invalid durable mutation transition from ~S to ~S."
+                              (durable-mutation-phase mutation)
+                              phase)
+             :tool-name "self.persist-definition"
+             :pathname (durable-mutation-pathname mutation)))
+    (setf (durable-mutation-phase mutation) phase)
+    (when git-commit
+      (setf (durable-mutation-git-commit mutation) git-commit))
+    (durable-mutation-journal configuration mutation :detail detail)
+    mutation))
+
+(-> durable-mutation-create
+    (configuration list
+     &key
+     (:relative-pathname string)
+     (:previous-source string)
+     (:proposed-source string))
+    durable-mutation)
+(defun durable-mutation-create
+    (configuration definition
+     &key relative-pathname previous-source proposed-source)
+  "Create and journal a pending durable transaction for DEFINITION."
+  (let* ((target (definition-key definition))
+         (mutation
+           (make-instance 'durable-mutation
+                          :identifier (make-identifier)
+                          :target target
+                          :pathname relative-pathname
+                          :previous-source previous-source
+                          :proposed-source proposed-source
+                          :phase :pending)))
+    (maphash
+     (lambda (identifier existing)
+       (declare (ignore identifier))
+       (when (and (string= target (durable-mutation-target existing))
+                  (member (durable-mutation-phase existing)
+                          '(:pending :installed :checked :source-written)
+                          :test #'eq))
+         (durable-mutation-transition
+          configuration
+          existing
+          :superseded
+          :detail (format nil "Superseded by mutation ~A."
+                          (durable-mutation-identifier mutation)))))
+     *durable-mutations*)
+    (setf (gethash (durable-mutation-identifier mutation)
+                   *durable-mutations*)
+          mutation)
+    (durable-mutation-journal configuration mutation)
+    mutation))
+
+(-> durable-mutation-mark-paths
+    (configuration list string)
+    list)
+(defun durable-mutation-mark-paths (configuration paths git-commit)
+  "Mark source-written mutations in committed PATHS durable at GIT-COMMIT."
+  (let ((marked nil))
+    (maphash
+     (lambda (identifier mutation)
+       (declare (ignore identifier))
+       (when (and (eq (durable-mutation-phase mutation) :source-written)
+                  (member (durable-mutation-pathname mutation)
+                          paths
+                          :test #'string=))
+         (durable-mutation-transition configuration
+                                      mutation
+                                      :durable
+                                      :git-commit git-commit)
+         (push mutation marked)))
+     *durable-mutations*)
+    (nreverse marked)))
+
+(-> mutation-journal-read-records (configuration) list)
+(defun mutation-journal-read-records (configuration)
+  "Read complete portable records from CONFIGURATION's mutation journal."
+  (let ((pathname (configuration-journal-path configuration)))
+    (if (probe-file pathname)
+        (with-open-file (stream pathname
+                                :direction :input
+                                :external-format :utf-8)
+          (let ((*read-eval* nil)
+                (end-marker (cons nil nil))
+                (records nil))
+            (handler-case
+                (loop for record = (read stream nil end-marker)
+                      until (eq record end-marker)
+                      do (push record records))
+              (end-of-file ()
+                nil)
+              (reader-error (condition)
+                (error 'source-mutation-error
+                       :message (format nil "Malformed mutation journal: ~A" condition)
+                       :tool-name "self.inspect"
+                       :pathname pathname)))
+            (nreverse records)))
+        nil)))
+
+(-> durable-mutation-record-p (t) boolean)
+(defun durable-mutation-record-p (record)
+  "Return true when RECORD is a valid durable-definition journal state."
+  (and (listp record)
+       (eq (first record) :mutation)
+       (eq (getf (rest record) :kind) :durable-definition)
+       (non-empty-string-p (getf (rest record) :id))
+       (non-empty-string-p (getf (rest record) :target))
+       (non-empty-string-p (getf (rest record) :pathname))
+       (stringp (getf (rest record) :previous))
+       (stringp (getf (rest record) :proposed))
+       (keywordp (getf (rest record) :result))
+       t))
+
+(-> durable-mutations-load (configuration) hash-table)
+(defun durable-mutations-load (configuration)
+  "Reconstruct durable mutation state from CONFIGURATION's append-only journal."
+  (clrhash *durable-mutations*)
+  (dolist (record (mutation-journal-read-records configuration))
+    (when (durable-mutation-record-p record)
+      (let* ((properties (rest record))
+             (identifier (getf properties :id))
+             (mutation
+               (make-instance 'durable-mutation
+                              :identifier identifier
+                              :target (getf properties :target)
+                              :pathname (getf properties :pathname)
+                              :previous-source (getf properties :previous)
+                              :proposed-source (getf properties :proposed)
+                              :phase (getf properties :result))))
+        (setf (durable-mutation-git-commit mutation)
+              (getf properties :git-commit)
+              (gethash identifier *durable-mutations*)
+              mutation))))
+  *durable-mutations*)
+
 (-> self-capture-evaluation (function) (values list string))
 (defun self-capture-evaluation (function)
   "Call FUNCTION in the active image while capturing output and rendered values."
@@ -221,9 +529,16 @@
                                   :level 10
                                   :length 100)))))))
 
+(-> self--install-definition (list string) t)
+(defun self--install-definition (definition source)
+  "Compile and install parsed DEFINITION while retaining its complete SOURCE."
+  (let ((result (eval definition)))
+    (setf (gethash (definition-key definition) *exploratory-definitions*) source)
+    result))
+
 (-> self-install-definition (configuration string) t)
 (defun self-install-definition (configuration source)
-  "Compile and install one complete SOURCE definition, recording its active history."
+  "Compile and install one exploratory SOURCE definition with active history."
   (with-live-mutation
     (let ((definition (self-read-form source)))
       (unless (definition-form-p definition)
@@ -242,8 +557,7 @@
                :proposed source
                :result :pending))
         (handler-case
-            (let ((result (eval definition)))
-              (setf (gethash key *exploratory-definitions*) source)
+            (let ((result (self--install-definition definition source)))
               (mutation-journal-append
                configuration
                (list :mutation
@@ -401,6 +715,21 @@
          (equal (definition-signature form)
                 (definition-signature definition)))))
 
+(-> source-find-definition (pathname list) (values source-form string))
+(defun source-find-definition (pathname definition)
+  "Return DEFINITION's parsed source form and complete file text from PATHNAME."
+  (let* ((source (uiop:read-file-string pathname))
+         (match (find-if
+                 (lambda (source-form)
+                   (source-definition-match-p source-form definition))
+                 (source-read-forms source))))
+    (unless match
+      (error 'source-mutation-error
+             :message (format nil "No matching definition exists in ~A." pathname)
+             :tool-name "self.persist-definition"
+             :pathname pathname))
+    (values match source)))
+
 (-> self-source-pathname (configuration string) pathname)
 (defun self-source-pathname (configuration relative-name)
   "Resolve RELATIVE-NAME to an existing editable file beneath Frob's src directory."
@@ -434,37 +763,33 @@
     (uiop:rename-file-overwriting-target temporary pathname)
     pathname))
 
-(-> source-replace-definition (pathname string) string)
+(-> source-replace-definition (pathname string) (values string string))
 (defun source-replace-definition (pathname definition-source)
-  "Replace the matching complete definition in PATHNAME with DEFINITION-SOURCE."
-  (let* ((definition (self-read-form definition-source :read-eval nil))
-         (source (uiop:read-file-string pathname))
-         (match (find-if
-                 (lambda (source-form)
-                   (source-definition-match-p source-form definition))
-                 (source-read-forms source))))
+  "Replace one complete definition and return updated and preceding source text."
+  (let ((definition (self-read-form definition-source :read-eval nil)))
     (unless (definition-form-p definition)
       (error 'source-mutation-error
              :message "The durable source is not a supported complete definition."
              :tool-name "self.persist-definition"
              :pathname pathname))
-    (unless match
-      (error 'source-mutation-error
-             :message (format nil "No matching definition exists in ~A." pathname)
-             :tool-name "self.persist-definition"
-             :pathname pathname))
-    (let ((updated
-            (concatenate 'string
-                         (subseq source 0 (source-form-start match))
-                         definition-source
-                         (subseq source (source-form-end match)))))
-      (source--atomic-write pathname updated)
-      updated)))
+    (multiple-value-bind (match source)
+        (source-find-definition pathname definition)
+      (let ((previous-definition
+              (subseq source
+                      (source-form-start match)
+                      (source-form-end match)))
+            (updated
+              (concatenate 'string
+                           (subseq source 0 (source-form-start match))
+                           definition-source
+                           (subseq source (source-form-end match)))))
+        (source--atomic-write pathname updated)
+        (values updated previous-definition)))))
 
 (defmethod tool-execute ((tool self-persist-definition-tool)
                          (context tool-context)
                          (arguments hash-table))
-  "Install and form-aware persist one complete definition in CONTEXT."
+  "Install, check, and form-aware persist one journaled definition in CONTEXT."
   (declare (ignore tool))
   (with-live-mutation
     (let* ((definition-source
@@ -472,21 +797,62 @@
            (relative-name
              (tool-argument arguments "pathname" :required t))
            (configuration (tool-context-configuration context))
-           (pathname (self-source-pathname configuration relative-name)))
-      (self-install-definition configuration definition-source)
-      (source-replace-definition pathname definition-source)
-      (mutation-journal-append
-       configuration
-       (list :mutation
-             :kind :source
-             :target (enough-namestring pathname
-                                        (configuration-source-root configuration))
-             :proposed definition-source
-             :result :source-written))
-      (tool-success
-       (format nil "Installed and wrote ~A. The change is not durable until committed."
-               (enough-namestring pathname
-                                  (configuration-source-root configuration)))))))
+           (pathname (self-source-pathname configuration relative-name))
+           (definition (self-read-form definition-source :read-eval nil))
+           (repository-name
+             (enough-namestring pathname
+                                (configuration-source-root configuration))))
+      (unless (definition-form-p definition)
+        (error 'source-mutation-error
+               :message "The durable source is not a supported complete definition."
+               :tool-name "self.persist-definition"
+               :pathname pathname))
+      (multiple-value-bind (source-form source)
+          (source-find-definition pathname definition)
+        (let* ((previous-source
+                 (subseq source
+                         (source-form-start source-form)
+                         (source-form-end source-form)))
+               (mutation
+                 (durable-mutation-create configuration
+                                          definition
+                                          :relative-pathname repository-name
+                                          :previous-source previous-source
+                                          :proposed-source definition-source))
+               (checker (tool-context-effective-mutation-checker context)))
+          (handler-case
+              (progn
+                (self--install-definition definition definition-source)
+                (durable-mutation-transition configuration mutation :installed)
+                (mutation-checker-check-active checker
+                                               configuration
+                                               definition-source)
+                (durable-mutation-transition configuration mutation :checked)
+                (source-replace-definition pathname definition-source)
+                (durable-mutation-transition configuration mutation :source-written)
+                (tool-success
+                 (format nil
+                         "Mutation ~A installed, checked, and wrote ~A. Commit that path to make it durable."
+                         (durable-mutation-identifier mutation)
+                         repository-name)))
+            (error (condition)
+              (when (member (durable-mutation-phase mutation)
+                            '(:pending :installed :checked)
+                            :test #'eq)
+                (handler-case
+                    (self--install-definition
+                     (self-read-form previous-source :read-eval nil)
+                     previous-source)
+                  (error ()
+                    nil)))
+              (unless (member (durable-mutation-phase mutation)
+                              '(:failed :superseded)
+                              :test #'eq)
+                (durable-mutation-transition configuration
+                                             mutation
+                                             :failed
+                                             :detail condition))
+              (error condition))))))))
 
 
 ;;;; -- Git Operations --
@@ -533,21 +899,29 @@
     (error 'tool-error
            :message "self.commit requires at least one explicit path."
            :tool-name "self.commit"))
-  (loop for path across paths
-        do (unless (and (non-empty-string-p path)
-                        (uiop:subpathp
-                         (merge-pathnames path
-                                          (configuration-source-root configuration))
-                         (configuration-source-root configuration)))
-             (error 'tool-error
-                    :message (format nil "Commit path ~S is outside the repository." path)
-                    :tool-name "self.commit"))
-        collect path))
+  (let* ((source-root (configuration-source-root configuration))
+         (launcher-root (merge-pathnames "bin/" source-root))
+         (recovery-root (merge-pathnames "recovery/" source-root)))
+    (loop for path across paths
+          for pathname = (and (non-empty-string-p path)
+                              (merge-pathnames path source-root))
+          do (unless (and pathname (uiop:subpathp pathname source-root))
+               (error 'tool-error
+                      :message (format nil "Commit path ~S is outside the repository." path)
+                      :tool-name "self.commit"))
+             (when (or (uiop:subpathp pathname launcher-root)
+                       (uiop:subpathp pathname recovery-root))
+               (error 'tool-error
+                      :message (format nil
+                                       "Normal self tools cannot commit stable artifact ~S."
+                                       path)
+                      :tool-name "self.commit"))
+          collect (enough-namestring pathname source-root))))
 
 (defmethod tool-execute ((tool self-commit-tool)
                          (context tool-context)
                          (arguments hash-table))
-  "Check, stage, and commit only the explicit paths supplied in ARGUMENTS."
+  "Check, commit, and durably journal the explicit paths supplied in ARGUMENTS."
   (declare (ignore tool))
   (with-live-mutation
     (let* ((configuration (tool-context-configuration context))
@@ -559,19 +933,42 @@
                :message "self.commit paths must be a JSON array."
                :tool-name "self.commit"))
       (let ((paths (self-validate-commit-paths configuration raw-paths)))
-        (self-git-command configuration (append '("diff" "--check" "--") paths))
-        (self-git-command configuration (append '("add" "--") paths))
-        (let ((output (self-git-command
-                       configuration
-                       (append (list "commit" "-m" title "--only" "--") paths)
-                       :ignore-error-status t)))
-          (mutation-journal-append
-           configuration
-           (list :mutation
-                 :kind :commit
-                 :paths paths
-                 :title title
-                 :result (if (search "nothing to commit" output :test #'char-equal)
-                             :unchanged
-                             :committed)))
-          (tool-success output))))))
+        (handler-case
+            (progn
+              (mutation-checker-check-source
+               (tool-context-effective-mutation-checker context)
+               configuration
+               paths)
+              (self-git-command configuration
+                                (append '("diff" "--check" "--") paths))
+              (let* ((output
+                       (self-git-command
+                        configuration
+                        (append (list "commit" "-m" title "--only" "--") paths)))
+                     (commit
+                       (string-trim
+                        '(#\Space #\Tab #\Newline #\Return)
+                        (self-git-command configuration '("rev-parse" "HEAD"))))
+                     (durable-mutations
+                       (durable-mutation-mark-paths configuration paths commit)))
+                (mutation-journal-append
+                 configuration
+                 (list :mutation
+                       :kind :commit
+                       :paths paths
+                       :title title
+                       :git-commit commit
+                       :durable-mutations
+                       (mapcar #'durable-mutation-identifier durable-mutations)
+                       :result :committed))
+                (tool-success output)))
+          (error (condition)
+            (mutation-journal-append
+             configuration
+             (list :mutation
+                   :kind :commit
+                   :paths paths
+                   :title title
+                   :result :failed
+                   :condition (bounded-string condition :limit 2000)))
+            (error condition)))))))

@@ -152,7 +152,13 @@
     :initarg :conversation
     :reader tool-context-conversation
     :type conversation
-    :documentation "The conversation requesting the operation."))
+    :documentation "The conversation requesting the operation.")
+   (mutation-checker
+    :initarg :mutation-checker
+    :initform nil
+    :reader tool-context-mutation-checker
+    :type t
+    :documentation "The optional durable-mutation check strategy."))
   (:documentation "The explicit capabilities supplied to one tool execution."))
 
 (defclass tool-result ()
