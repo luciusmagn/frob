@@ -238,7 +238,7 @@
                                "arguments" "{}"))
                 (result (tool-registry-execute-call
                          registry unknown-call context)))
-           (test-assert (= (length (tool-registry-tools registry)) 13)
+           (test-assert (= (length (tool-registry-tools registry)) 16)
                         "the default registry exposes the complete initial tool set")
            (test-assert (= (length schemas) 2)
                         "the provider schemas contain two namespaces")
@@ -248,10 +248,57 @@
                         "the Lisp namespace exposes six worker operations")
            (test-assert (string= (json-get (aref schemas 1) "name") "self")
                         "the active-image namespace is second")
-           (test-assert (= (length (json-get (aref schemas 1) "tools")) 7)
-                        "the self namespace exposes seven active-image operations")
+           (test-assert (= (length (json-get (aref schemas 1) "tools")) 10)
+                        "the self namespace exposes ten active-image operations")
            (test-assert (not (tool-result-success-p result))
                         "unknown provider calls produce a correlated tool failure"))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-generation-manifest () null)
+(defun test-generation-manifest ()
+  "Test generation publication, loading, selection, and compatibility checks."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (directory (merge-pathnames "generation-under-test/"
+                                     (generation-root configuration)))
+         (generation
+           (make-instance 'generation
+                          :identifier "generation-under-test"
+                          :directory directory
+                          :core-pathname (merge-pathnames "frob.core" directory)
+                          :temporary-core-pathname
+                          (merge-pathnames ".frob.core.tmp" directory)
+                          :manifest-pathname
+                          (merge-pathnames "manifest.sexp" directory)
+                          :git-commit "0123456789abcdef"
+                          :journal-position 27
+                          :created-at 4000000000
+                          :status ':pending)))
+    (unwind-protect
+         (progn
+           (ensure-directories-exist
+            (generation-temporary-core-pathname generation))
+           (with-open-file (stream (generation-temporary-core-pathname generation)
+                                   :direction :output
+                                   :if-exists :supersede
+                                   :if-does-not-exist :create
+                                   :element-type '(unsigned-byte 8))
+             (write-byte 42 stream))
+           (generation-publish configuration generation)
+           (let ((loaded (generation-find configuration
+                                          "generation-under-test")))
+             (test-assert loaded
+                          "a published generation appears in retained listings")
+             (test-assert (generation-compatible-p loaded)
+                          "a manifest from this runtime is compatible")
+             (test-assert (= (generation-journal-position loaded) 27)
+                          "generation manifests preserve mutation journal position")
+             (test-assert
+              (string= (generation-identifier
+                        (generation-selected configuration))
+                       "generation-under-test")
+              "publication atomically selects the ready generation")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -342,6 +389,7 @@
     (test-provider-stream-decoding)
     (test-tool-registry)
     (test-lisp-worker-protocol)
-    (test-self-tools))
+    (test-self-tools)
+    (test-generation-manifest))
   (format t "~&~:D Frob tests passed.~%" *test-count*)
   t)

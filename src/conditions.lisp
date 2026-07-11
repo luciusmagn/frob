@@ -101,3 +101,16 @@
     :type (option pathname)
     :documentation "The source file involved in the failed mutation."))
   (:documentation "An active-image or durable source mutation failed."))
+
+(define-condition checkpoint-error (frob-error)
+  ((stage
+    :initarg :stage
+    :reader checkpoint-error-stage
+    :type keyword
+    :documentation "The checkpoint stage that failed.")
+   (pathname
+    :initarg :pathname
+    :reader checkpoint-error-pathname
+    :type (option pathname)
+    :documentation "The checkpoint artifact involved in the failure, if any."))
+  (:documentation "A generation could not be validated, saved, or published."))

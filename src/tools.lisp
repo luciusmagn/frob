@@ -85,6 +85,18 @@
   ()
   (:documentation "Commit an explicit set of checked Frob source paths."))
 
+(defclass self-checkpoint-tool (self-tool)
+  ()
+  (:documentation "Save the active image as a retained working generation."))
+
+(defclass self-generations-tool (self-tool)
+  ()
+  (:documentation "List retained working generations and compatibility."))
+
+(defclass self-rollback-tool (self-tool)
+  ()
+  (:documentation "Select a retained generation for recovery startup."))
+
 (-> tool-canonical-name (tool) string)
 (defun tool-canonical-name (tool)
   "Return TOOL's dotted human-readable name."
@@ -390,5 +402,21 @@
                   "title" (tool-string-property "A single commit title under 72 characters.")
                   "paths" (tool-string-array-property
                            "Repository-relative paths to stage and commit."))
-                 '("title" "paths"))))
+                 '("title" "paths")))
+      (register 'self-checkpoint-tool
+                "self" "checkpoint"
+                "Validate and asynchronously save the active image as a generation."
+                empty-schema)
+      (register 'self-generations-tool
+                "self" "generations"
+                "List retained generations and whether this SBCL can boot them."
+                empty-schema)
+      (register 'self-rollback-tool
+                "self" "rollback"
+                "Select a compatible retained generation for recovery startup."
+                (tool-object-schema
+                 (json-object
+                  "generation" (tool-string-property
+                                 "The retained generation identifier."))
+                 '("generation"))))
     registry))
