@@ -27,6 +27,7 @@
                              (:file "tools")
                              (:file "lisp-worker")
                              (:file "self-tools")
+                             (:file "durable-mutations")
                              (:file "generations")
                              (:file "agent")
                              (:file "terminal")
