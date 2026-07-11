@@ -101,12 +101,19 @@ name when it still needs an argument. The commands are:
 /checkpoint     save a retained live generation
 /generations    list retained generations
 /rollback       pick a generation for recovery
+/status         show usage and rate limits
 /quit           leave Frob
 #+END_EXAMPLE
 
 =/resume=, =/rollback=, and =/effort= open an interactive picker listing
 choices newest first; each also accepts an explicit argument. Conversations
 remember the directory they were started in, and the picker shows it.
+
+=/status= reports the model, token usage, and subscription rate limit windows
+parsed from provider responses. Requests never ask for the provider's priority
+service tier, so Frob always uses the standard path that drains rate limits
+slowest. Hosted web search is requested in cached mode by default; set
+=FROB_WEB_SEARCH= to =live= or =disabled= to change it.
 
 Use a double slash to send a user message that begins with a literal slash.
 

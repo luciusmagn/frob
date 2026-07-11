@@ -60,6 +60,17 @@
                    "tool arguments render as a dim detail")
       (test-assert (= (length entry) 2)
                    "tool requests stay on one header row"))
+    (let ((entry (response-item-entry
+                  application
+                  (json-decode
+                   "{\"type\":\"web_search_call\",
+                     \"action\":{\"type\":\"search\",
+                                 \"query\":\"live lisp images\"}}"))))
+      (test-assert (equal (first entry) (terminal-span :tool "▸ web search"))
+                   "web search calls present a styled search header")
+      (test-assert (search "live lisp images"
+                           (markdown-tests--row-text entry))
+                   "web search entries show their query"))
     (let ((entry (conversation-record-entry
                   application
                   '(:tool-result :seq 2 :time 0 :call-id 1 :tool "self.eval"
@@ -267,6 +278,66 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-status-entry () null)
+(defun test-status-entry ()
+  "Test /status token accounting and rate limit presentation."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation (conversation-create configuration
+                                                   :identifier "status"))
+                (provider (provider-create configuration))
+                (application (make-instance 'application
+                                            :configuration configuration
+                                            :conversation conversation
+                                            :provider provider
+                                            :ui (terminal-ui-create
+                                                 :terminal (make-instance
+                                                            'recording-terminal
+                                                            :columns 80)))))
+           (test-assert (search "No rate limit data yet"
+                                (markdown-tests--row-text
+                                 (application-status-entry application)))
+                        "status explains missing rate limit data")
+           (conversation-append-provider-metadata
+            conversation
+            (list :request-number 1
+                  :response-id "one"
+                  :usage '(("input_tokens" 1000)
+                           ("output_tokens" 500)
+                           ("total_tokens" 1500))))
+           (conversation-append-provider-metadata
+            conversation
+            (list :request-number 2
+                  :response-id "two"
+                  :usage '(("input_tokens" 2000)
+                           ("output_tokens" 300)
+                           ("total_tokens" 2300))))
+           (setf (provider-rate-limits provider)
+                 (list :captured-at (get-universal-time)
+                       :primary (list :used-percent 28
+                                      :window-minutes 300
+                                      :resets-at nil)
+                       :secondary (list :used-percent 45.5
+                                        :window-minutes 10080
+                                        :resets-at nil)))
+           (let ((text (markdown-tests--row-text
+                        (application-status-entry application))))
+             (test-assert (search "3.8K total (3.0K input + 800 output)" text)
+                          "status sums token usage across requests")
+             (test-assert (search "5h limit" text)
+                          "the primary window is named by its duration")
+             (test-assert (search "weekly limit" text)
+                          "the secondary window is named by its duration")
+             (test-assert (search "72% left" text)
+                          "status reports the remaining primary percentage")
+             (test-assert (search "█" text)
+                          "status draws usage bars")
+             (test-assert (search "standard" text)
+                          "status names the standard service path")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> run-application-tests () boolean)
 (defun run-application-tests ()
   "Run focused application presentation tests and return true on success."
@@ -274,4 +345,5 @@
   (test-streaming-presentation)
   (test-conversation-picker)
   (test-effort-switch)
+  (test-status-entry)
   t)

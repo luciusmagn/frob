@@ -2,12 +2,6 @@
 
 ;;;; -- Application Lifecycle --
 
-(-> application-banner--field (string string) list)
-(defun application-banner--field (label value)
-  "Return one aligned banner row pairing dim LABEL with plain VALUE."
-  (list (terminal-span :dim (format nil "  ~13A " label))
-        (terminal-span :plain (format nil "~A~%" value))))
-
 (-> application-banner (application) list)
 (defun application-banner (application)
   "Return APPLICATION's restrained styled banner and security notice."
@@ -18,17 +12,17 @@
            (terminal-span :dim (format nil "  v~A~%" +frob-version+))
            (terminal-span :brand (format nil "█▀  █▀▄ █▄█ █▄█~%"))
            (terminal-span :plain (format nil "~%")))
-     (application-banner--field "model"
-                                (format nil "~A (effort ~A)"
-                                        (configuration-model configuration)
-                                        (configuration-reasoning-effort
-                                         configuration)))
-     (application-banner--field "conversation"
-                                (conversation-identifier conversation))
-     (application-banner--field "workspace"
-                                (namestring
-                                 (configuration-working-directory
-                                  configuration)))
+     (application--field-spans "model"
+                               (format nil "~A (effort ~A)"
+                                       (configuration-model configuration)
+                                       (configuration-reasoning-effort
+                                        configuration)))
+     (application--field-spans "conversation"
+                               (conversation-identifier conversation))
+     (application--field-spans "workspace"
+                               (namestring
+                                (configuration-working-directory
+                                 configuration)))
      (list (terminal-span
             :notice
             (format nil "~%  Frob executes model-generated code with your ~

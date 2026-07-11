@@ -28,6 +28,142 @@
         "No saved conversations exist.")))
 
 
+;;;; -- Usage Status --
+
+(-> application--conversation-usage (application) list)
+(defun application--conversation-usage (application)
+  "Return summed (:input N :output N :total N) usage for the active conversation."
+  (let ((input 0)
+        (output 0)
+        (total 0))
+    (labels ((usage-count (usage key)
+               "Return the integer usage value stored under KEY, or zero."
+               (let ((value (second (assoc key usage :test #'string=))))
+                 (if (integerp value)
+                     value
+                     0))))
+      (dolist (record (rest (conversation--read-records
+                             (conversation-pathname
+                              (application-conversation application)))))
+        (when (eq (first record) :provider)
+          (let ((usage (getf (getf (rest record) :metadata) :usage)))
+            (when (listp usage)
+              (incf input (usage-count usage "input_tokens"))
+              (incf output (usage-count usage "output_tokens"))
+              (incf total (usage-count usage "total_tokens")))))))
+    (list :input input :output output :total total)))
+
+(-> application--token-count-description (integer) string)
+(defun application--token-count-description (count)
+  "Return COUNT as a compact human-readable token quantity."
+  (cond
+    ((< count 1000)
+     (format nil "~D" count))
+    ((< count 1000000)
+     (format nil "~,1FK" (/ count 1000)))
+    (t
+     (format nil "~,2FM" (/ count 1000000)))))
+
+(-> application--window-label ((option integer) string) string)
+(defun application--window-label (minutes fallback)
+  "Return the human name of a MINUTES-long rate limit window."
+  (labels ((approximately-p (expected)
+             "Return true when MINUTES is within five percent of EXPECTED."
+             (and minutes
+                  (<= (* expected 95/100) minutes (* expected 105/100)))))
+    (cond
+      ((approximately-p 300) "5h")
+      ((approximately-p 1440) "daily")
+      ((approximately-p 10080) "weekly")
+      ((approximately-p 43200) "monthly")
+      ((null minutes) fallback)
+      ((>= minutes 60) (format nil "~Dh" (round minutes 60)))
+      (t (format nil "~Dm" minutes)))))
+
+(-> application--reset-description ((option integer)) (option string))
+(defun application--reset-description (resets-at)
+  "Return when RESETS-AT universal time occurs, as a compact local time."
+  (when resets-at
+    (multiple-value-bind (second minute hour date month year)
+        (decode-universal-time resets-at)
+      (declare (ignore second))
+      (if (< (- resets-at (get-universal-time)) 86400)
+          (format nil "~2,'0D:~2,'0D" hour minute)
+          (format nil "~4,'0D-~2,'0D-~2,'0D ~2,'0D:~2,'0D"
+                  year month date hour minute)))))
+
+(-> application--limit-spans (string list) list)
+(defun application--limit-spans (fallback-label window)
+  "Return one rate limit WINDOW as an aligned transcript row with a usage bar."
+  (let* ((used (min 100 (max 0 (getf window :used-percent))))
+         (left (- 100 used))
+         (cells 20)
+         (filled (round (* cells left) 100))
+         (bar (concatenate 'string
+                           (make-string filled :initial-element #\█)
+                           (make-string (- cells filled) :initial-element #\░))))
+    (list (terminal-span :dim
+                         (format nil "  ~13A "
+                                 (format nil "~A limit"
+                                         (application--window-label
+                                          (getf window :window-minutes)
+                                          fallback-label))))
+          (terminal-span :plain (format nil "[~A] ~D% left" bar (round left)))
+          (terminal-span :dim
+                         (format nil "~@[ (resets ~A)~]~%"
+                                 (application--reset-description
+                                  (getf window :resets-at)))))))
+
+(-> application-status-entry (application) list)
+(defun application-status-entry (application)
+  "Return the styled /status summary of APPLICATION's session and rate limits."
+  (let* ((configuration (application-configuration application))
+         (provider (application-provider application))
+         (snapshot (and provider (provider-rate-limits provider)))
+         (usage (application--conversation-usage application)))
+    (append
+     (list (terminal-span :brand "frob")
+           (terminal-span :dim (format nil " v~A~%" +frob-version+)))
+     (application--field-spans "model"
+                               (format nil "~A (effort ~A)"
+                                       (configuration-model configuration)
+                                       (configuration-reasoning-effort
+                                        configuration)))
+     (application--field-spans "conversation"
+                               (conversation-identifier
+                                (application-conversation application)))
+     (application--field-spans "workspace"
+                               (or (application--abbreviated-directory
+                                    (namestring
+                                     (configuration-working-directory
+                                      configuration)))
+                                   ""))
+     (application--field-spans "path"
+                               "standard (the fast path is never requested)")
+     (application--field-spans "web search"
+                               (configuration-web-search-mode configuration))
+     (application--field-spans "token usage"
+                               (format nil "~A total (~A input + ~A output)"
+                                       (application--token-count-description
+                                        (getf usage :total))
+                                       (application--token-count-description
+                                        (getf usage :input))
+                                       (application--token-count-description
+                                        (getf usage :output))))
+     (cond
+       ((null snapshot)
+        (list (terminal-span :dim
+                             "  No rate limit data yet; send a message first.")))
+       (t
+        (append
+         (let ((primary (getf snapshot :primary)))
+           (when primary
+             (application--limit-spans "primary" primary)))
+         (let ((secondary (getf snapshot :secondary)))
+           (when secondary
+             (application--limit-spans "weekly" secondary)))))))))
+
+
 ;;;; -- Interactive Pickers --
 
 (-> application--calendar-description (integer) string)
@@ -186,6 +322,9 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        :quit)
       ((string= command "/help")
        (application-present application (application-help))
+       :continue)
+      ((member command '("/status" "/usage") :test #'string=)
+       (application-present application (application-status-entry application))
        :continue)
       ((string= command "/new")
        (application-install-conversation application

@@ -69,6 +69,7 @@
     (:name "/checkpoint"    :argument nil :description "save a retained live generation")
     (:name "/generations"   :argument nil :description "list retained generations")
     (:name "/rollback"      :argument nil :description "pick a generation for recovery")
+    (:name "/status"        :argument nil :description "show usage and rate limits")
     (:name "/quit"          :argument nil :description "leave Frob"))
   :test #'equal
   :documentation "The interactive commands offered by completion and /help.")
@@ -313,6 +314,43 @@
                     (subseq lines 0 +application-tool-output-lines+)
                     (- (length lines) +application-tool-output-lines+)))))))
 
+(-> application--field-spans (string string) list)
+(defun application--field-spans (label value)
+  "Return one aligned dim LABEL and plain VALUE line as transcript spans."
+  (list (terminal-span :dim (format nil "  ~13A " label))
+        (terminal-span :plain (format nil "~A~%" value))))
+
+(-> web-search-call-detail (json-object) string)
+(defun web-search-call-detail (item)
+  "Return a short human-readable description of a web search call ITEM."
+  (let* ((action (json-get item "action"))
+         (action-type (if (json-object-p action)
+                          (or (json-get action "type") "")
+                          "")))
+    (cond
+      ((string= action-type "search")
+       (let ((query (json-get action "query"))
+             (queries (json-get action "queries")))
+         (cond
+           ((non-empty-string-p query)
+            query)
+           ((and (vectorp queries)
+                 (plusp (length queries))
+                 (stringp (aref queries 0)))
+            (format nil "~A~:[~;, more~]"
+                    (aref queries 0)
+                    (> (length queries) 1)))
+           (t
+            ""))))
+      ((string= action-type "open_page")
+       (or (json-get action "url") ""))
+      ((string= action-type "find_in_page")
+       (format nil "~@[~A in ~]~A"
+               (json-get action "pattern")
+               (or (json-get action "url") "")))
+      (t
+       ""))))
+
 (-> response-item-entry (application json-object) (option list))
 (defun response-item-entry (application item)
   "Return a styled transcript entry for completed provider ITEM."
@@ -344,6 +382,14 @@
         :detail (let ((arguments (json-get item "arguments")))
                   (and (non-empty-string-p arguments)
                        arguments))))
+      ((string= (or type "") "web_search_call")
+       (application--transcript-entry
+        application
+        :style ':tool
+        :header "▸ web search"
+        :detail (let ((detail (web-search-call-detail item)))
+                  (and (non-empty-string-p detail)
+                       detail))))
       (t
        nil))))
 
