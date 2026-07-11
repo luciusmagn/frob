@@ -2,17 +2,37 @@
 
 ;;;; -- Application Lifecycle --
 
-(-> application-banner (application) string)
+(-> application-banner--field (string string) list)
+(defun application-banner--field (label value)
+  "Return one aligned banner row pairing dim LABEL with plain VALUE."
+  (list (terminal-span :dim (format nil "  ~13A " label))
+        (terminal-span :plain (format nil "~A~%" value))))
+
+(-> application-banner (application) list)
 (defun application-banner (application)
-  "Return APPLICATION's restrained startup banner and security notice."
+  "Return APPLICATION's restrained styled banner and security notice."
   (let ((configuration (application-configuration application))
         (conversation (application-conversation application)))
-    (format nil
-            "Frob ~A | ~A | effort ~A~%conversation ~A~%~%Frob executes model-generated code with your user privileges. It is not a security sandbox.~%Use /help for commands."
-            +frob-version+
-            (configuration-model configuration)
-            (configuration-reasoning-effort configuration)
-            (conversation-identifier conversation))))
+    (append
+     (list (terminal-span :brand "█▀▀ █▀█ █▀█ █▄▄")
+           (terminal-span :dim (format nil "  v~A~%" +frob-version+))
+           (terminal-span :brand (format nil "█▀  █▀▄ █▄█ █▄█~%"))
+           (terminal-span :plain (format nil "~%")))
+     (application-banner--field "model"
+                                (format nil "~A (effort ~A)"
+                                        (configuration-model configuration)
+                                        (configuration-reasoning-effort
+                                         configuration)))
+     (application-banner--field "conversation"
+                                (conversation-identifier conversation))
+     (application-banner--field "workspace"
+                                (namestring
+                                 (configuration-working-directory
+                                  configuration)))
+     (list (terminal-span
+            :notice
+            (format nil "~%  Frob executes model-generated code with your ~
+                         user privileges.~%  It is not a security sandbox."))))))
 
 (-> application-handle-expected-error (application frob-error) null)
 (defun application-handle-expected-error (application condition)
