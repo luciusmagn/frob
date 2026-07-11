@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+
+set -u
+
+source_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+sbcl_command=${FROB_SBCL:-sbcl}
+terminal_state=
+recovery_requested=false
+remaining_arguments=()
+
+for argument in "$@"; do
+  if [[ "$argument" == "--recovery" ]]; then
+    recovery_requested=true
+  else
+    remaining_arguments+=("$argument")
+  fi
+done
+
+if [[ -t 0 ]]; then
+  terminal_state=$(stty -g 2>/dev/null || true)
+fi
+
+restore_terminal()
+{
+  if [[ -n "$terminal_state" && -t 0 ]]; then
+    stty "$terminal_state" 2>/dev/null || true
+    printf '\033[?2004l\033[?25h\033[0m' > /dev/tty 2>/dev/null || true
+  fi
+}
+
+trap restore_terminal EXIT HUP INT TERM
+
+if [[ "$recovery_requested" == true ]]; then
+  restore_terminal
+  "$sbcl_command" --script "$source_root/recovery/launcher.lisp" \
+    "$source_root" "${remaining_arguments[@]}"
+  exit $?
+fi
+
+if "$sbcl_command" --script "$source_root/bin/frob-active" "$@"; then
+  exit 0
+else
+  status=$?
+fi
+
+restore_terminal
+
+if [[ "$status" -ne 130 && "$status" -ne 143 ]]; then
+  state_home=${XDG_STATE_HOME:-$HOME/.local/state}
+  capsule=
+  if [[ -d "$state_home/frob/crashes" ]]; then
+    capsule=$(find "$state_home/frob/crashes" -maxdepth 1 -type f -name '*.sexp' \
+      -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
+  fi
+  recovery_arguments=("--status" "$status")
+  if [[ -n "$capsule" ]]; then
+    recovery_arguments+=("--capsule" "$capsule")
+  fi
+  recovery_arguments+=("--" "$@")
+  "$sbcl_command" --script "$source_root/recovery/launcher.lisp" \
+    "$source_root" "${recovery_arguments[@]}"
+  exit $?
+fi
+
+exit "$status"
