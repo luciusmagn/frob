@@ -27,7 +27,12 @@
     :initform nil
     :accessor scripted-provider-turn-budget-states
     :type list
-    :documentation "The turn-budget state supplied on each request."))
+    :documentation "The turn-budget state supplied on each request.")
+   (goal-contexts
+    :initform nil
+    :accessor scripted-provider-goal-contexts
+    :type list
+    :documentation "The goal context supplied on each request."))
   (:documentation "A deterministic provider for exercising repeated agent rounds."))
 
 (defmethod provider-stream-turn
@@ -36,7 +41,8 @@
      (tool-namespaces vector)
      (event-callback function)
      &key
-       (turn-budget-state :normal))
+       (turn-budget-state :normal)
+       goal-context)
   "Return PROVIDER's next scripted result after recording request state."
   (push (length (conversation-input-items conversation))
         (scripted-provider-input-counts provider))
@@ -46,6 +52,8 @@
         (scripted-provider-tool-schema-counts provider))
   (push turn-budget-state
         (scripted-provider-turn-budget-states provider))
+  (push goal-context
+        (scripted-provider-goal-contexts provider))
   (let ((result (pop (scripted-provider-results provider))))
     (unless result
       (error "The scripted provider has no remaining result."))

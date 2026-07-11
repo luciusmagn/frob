@@ -133,6 +133,29 @@
              (test-assert (string= (json-get (aref final-input 3) "role")
                                    "user")
                           "finalization retains the original conversation input"))
+           (let* ((goal-request
+                    (provider-request-object
+                     provider conversation schemas
+                     :goal-context "<goal_context>persist</goal_context>"))
+                  (goal-input (json-get goal-request "input"))
+                  (goal-message (aref goal-input 2)))
+             (test-assert (= (length goal-input) 4)
+                          "an active goal adds one transient developer message")
+             (test-assert (string= (json-get goal-message "role") "developer")
+                          "the goal context is a developer message")
+             (test-assert
+              (search "<goal_context>"
+                      (json-get (aref (json-get goal-message "content") 0)
+                                "text"))
+              "the goal context rides as developer text"))
+           (let ((final-goal-input
+                   (json-get (provider-request-object
+                              provider conversation schemas
+                              :turn-budget-state :finalization
+                              :goal-context "<goal_context>x</goal_context>")
+                             "input")))
+             (test-assert (= (length final-goal-input) 4)
+                          "finalization drops the transient goal context"))
            (test-assert
             (null (provider-web-search-tool
                    (make-instance 'configuration
@@ -319,9 +342,10 @@
      (event-callback function)
      &key
        force-refresh
-       (turn-budget-state :normal))
+       (turn-budget-state :normal)
+       goal-context)
   "Return the next scripted PROVIDER outcome and record FORCE-REFRESH."
-  (declare (ignore conversation tool-namespaces event-callback))
+  (declare (ignore conversation tool-namespaces event-callback goal-context))
   (push force-refresh (test-codex-provider-refresh-flags provider))
   (push turn-budget-state (test-codex-provider-turn-budget-states provider))
   (let ((outcome (pop (test-codex-provider-outcomes provider))))

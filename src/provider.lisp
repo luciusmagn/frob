@@ -145,11 +145,12 @@
 
 (-> provider-stream-turn
     (model-provider conversation vector function
-     &key (:turn-budget-state turn-budget-state))
+     &key (:turn-budget-state turn-budget-state)
+          (:goal-context (option string)))
     provider-result)
 (defgeneric provider-stream-turn
     (provider conversation tool-namespaces event-callback
-     &key turn-budget-state)
+     &key turn-budget-state goal-context)
   (:documentation
    "Stream one model response for CONVERSATION using TOOL-NAMESPACES and EVENT-CALLBACK."))
 
@@ -227,13 +228,17 @@ at reference commit 5c19155c."
 ;; 5c19155c filters its explicit "default" sentinel out of requests too).
 (-> provider-request-object
     (codex-subscription-provider conversation vector
-     &key (:turn-budget-state turn-budget-state))
+     &key (:turn-budget-state turn-budget-state)
+          (:goal-context (option string)))
     json-object)
 (defun provider-request-object
-    (provider conversation tool-namespaces &key (turn-budget-state :normal))
+    (provider conversation tool-namespaces
+     &key (turn-budget-state :normal) goal-context)
   "Build the complete stateless Sol Responses Lite request for CONVERSATION.
 
-The request never carries a service_tier, keeping Frob on the standard path."
+The request never carries a service_tier, keeping Frob on the standard path.
+GOAL-CONTEXT rides as one transient developer message that is never persisted
+in the durable conversation, mirroring the budget reminders."
   (let* ((configuration (provider-configuration provider))
          (finalization-p (eq turn-budget-state :finalization))
          (web-search-tool (and (not finalization-p)
@@ -253,6 +258,8 @@ The request never carries a service_tier, keeping Frob on the standard path."
                   (list (responses-lite-additional-tools effective-tools)
                         (responses-lite-developer-message
                          (system-prompt configuration)))
+                  (when (and goal-context (not finalization-p))
+                    (list (responses-lite-developer-message goal-context)))
                   (when budget-message
                     (list budget-message))))
          (input (coerce (append prefix (conversation-input-items conversation))
@@ -566,11 +573,12 @@ The request never carries a service_tier, keeping Frob on the standard path."
 (-> provider-attempt-turn
     (model-provider conversation vector function
      &key (:force-refresh boolean)
-          (:turn-budget-state turn-budget-state))
+          (:turn-budget-state turn-budget-state)
+          (:goal-context (option string)))
     provider-result)
 (defgeneric provider-attempt-turn
     (provider conversation tool-namespaces event-callback
-     &key force-refresh turn-budget-state)
+     &key force-refresh turn-budget-state goal-context)
   (:documentation
    "Perform one normalized provider attempt, optionally forcing credential refresh."))
 
@@ -581,7 +589,8 @@ The request never carries a service_tier, keeping Frob on the standard path."
      (event-callback function)
      &key
        force-refresh
-       (turn-budget-state :normal))
+       (turn-budget-state :normal)
+       goal-context)
   "Perform one direct request and normalize every HTTP boundary condition."
   (declare (type boolean force-refresh))
   (handler-case
@@ -594,7 +603,8 @@ The request never carries a service_tier, keeping Frob on the standard path."
               provider
               conversation
               tool-namespaces
-              :turn-budget-state turn-budget-state)
+              :turn-budget-state turn-budget-state
+              :goal-context goal-context)
              credentials
              conversation)
           (provider-record-rate-limits provider headers)
@@ -627,7 +637,8 @@ The request never carries a service_tier, keeping Frob on the standard path."
      (tool-namespaces vector)
      (event-callback function)
      &key
-       (turn-budget-state :normal))
+       (turn-budget-state :normal)
+       goal-context)
   "Stream one Sol turn with one credential reload and one bounded refresh attempt."
   (loop for attempt-number from 1 to 3
         for force-refresh = (= attempt-number 3)
@@ -638,7 +649,8 @@ The request never carries a service_tier, keeping Frob on the standard path."
                                         tool-namespaces
                                         event-callback
                                         :force-refresh force-refresh
-                                        :turn-budget-state turn-budget-state))
+                                        :turn-budget-state turn-budget-state
+                                        :goal-context goal-context))
              (provider-unauthorized ()
                (when (= attempt-number 3)
                  (error 'authentication-error

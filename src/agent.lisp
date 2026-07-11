@@ -246,14 +246,16 @@
                  :maximum-tool-calls maximum-tool-calls))
 
 (-> agent-run-user-turn
-    (agent string &key (:observer agent-observer))
+    (agent string &key (:observer agent-observer)
+           (:goal-context (option string)))
     provider-result)
-(defgeneric agent-run-user-turn (agent content &key observer)
+(defgeneric agent-run-user-turn (agent content &key observer goal-context)
   (:documentation
    "Persist user CONTENT, run all bounded model and tool rounds, and return the final provider result."))
 
 (defmethod agent-run-user-turn
-    ((agent agent) (content string) &key (observer (make-instance 'agent-observer)))
+    ((agent agent) (content string)
+     &key (observer (make-instance 'agent-observer)) goal-context)
   "Run one serialized user turn through AGENT while presenting events to OBSERVER."
   (unless (non-empty-string-p content)
     (error 'agent-loop-error
@@ -264,7 +266,7 @@
     (let ((conversation (agent-conversation agent)))
       (conversation-append-user-message conversation content)
       (unwind-protect
-           (agent--run-provider-loop agent observer)
+           (agent--run-provider-loop agent observer goal-context)
         (setf (conversation-turn-state conversation) nil)))))
 
 
@@ -448,8 +450,10 @@
          :tool-calls tool-calls
          :reason reason))
 
-(-> agent--run-provider-loop (agent agent-observer) provider-result)
-(defun agent--run-provider-loop (agent observer)
+(-> agent--run-provider-loop
+    (agent agent-observer (option string))
+    provider-result)
+(defun agent--run-provider-loop (agent observer goal-context)
   "Run bounded provider and tool rounds until AGENT's turn completes."
   (let ((seen-call-identifiers (make-hash-table :test #'equal))
         (request-number 0)
@@ -483,7 +487,8 @@
                   conversation
                   provider-tools
                   (agent--provider-event-callback observer)
-                  :turn-budget-state budget-state))
+                  :turn-budget-state budget-state
+                  :goal-context goal-context))
                (calls (provider-result-tool-calls result)))
           (agent--validate-tool-call-identifiers
            agent calls seen-call-identifiers request-number)
