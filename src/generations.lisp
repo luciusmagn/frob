@@ -55,8 +55,65 @@
     :documentation "The coordinator process identifier while publication is pending."))
   (:documentation "A saved live image paired with its source and runtime identity."))
 
+(defclass generation-core-probe-runner ()
+  ()
+  (:documentation
+   "The execution boundary used to query an unpublished generation core."))
+
+(defclass sbcl-generation-core-probe-runner (generation-core-probe-runner)
+  ((command
+    :initarg :command
+    :reader generation-core-probe-runner-command
+    :type non-empty-string
+    :documentation "The SBCL executable used to boot an unpublished core."))
+  (:documentation "A core probe runner implemented by a separate SBCL process."))
+
+(define-constant +checkpoint-core-probe-argument+
+  "--frob-internal-checkpoint-probe"
+  :test #'string=
+  :documentation "The exact private argument that requests a retained-core identity probe.")
+
 (defvar *checkpoint-in-progress-p* nil
   "True while this active process has one unpublished checkpoint.")
+
+(defvar *checkpoint-core-probe-record* nil
+  "The portable generation identity embedded in a checkpoint saver core.")
+
+(-> generation-core-probe-run
+    (generation-core-probe-runner generation)
+    string)
+(defgeneric generation-core-probe-run (runner generation)
+  (:documentation
+   "Boot GENERATION's temporary core through RUNNER and return its probe output."))
+
+(defmethod generation-core-probe-run
+    ((runner sbcl-generation-core-probe-runner) (generation generation))
+  "Boot GENERATION's unpublished core and capture its exact internal probe output."
+  (handler-case
+      (uiop:run-program
+       (list (generation-core-probe-runner-command runner)
+             "--noinform"
+             "--core"
+             (namestring (generation-temporary-core-pathname generation))
+             "--end-runtime-options"
+             +checkpoint-core-probe-argument+)
+       :input nil
+       :output :string
+       :error-output :output)
+    (error ()
+      (error 'checkpoint-error
+             :message "The saved checkpoint core could not run its internal probe."
+             :stage ':probe
+             :pathname (generation-temporary-core-pathname generation)))))
+
+(-> generation-core-probe-runner-create () generation-core-probe-runner)
+(defun generation-core-probe-runner-create ()
+  "Create the production subprocess runner for unpublished generation cores."
+  (let ((configured-command (uiop:getenv "FROB_SBCL")))
+    (make-instance 'sbcl-generation-core-probe-runner
+                   :command (if (non-empty-string-p configured-command)
+                                configured-command
+                                "sbcl"))))
 
 (-> generation-root (configuration) pathname)
 (defun generation-root (configuration)
@@ -116,6 +173,29 @@
         :architecture (machine-type)
         :created-at (generation-created-at generation)))
 
+(-> generation-core-probe-record (generation) list)
+(defun generation-core-probe-record (generation)
+  "Return the exact portable identity expected from GENERATION's saved core."
+  (list :frob-checkpoint-core
+        :version 1
+        :generation-id (generation-identifier generation)
+        :git-commit (generation-git-commit generation)))
+
+(-> generation-core-probe-output (list) string)
+(defun generation-core-probe-output (record)
+  "Return canonical one-line output for a retained-core probe RECORD."
+  (with-output-to-string (stream)
+    (let ((*print-base* 10)
+          (*print-case* ':upcase)
+          (*print-circle* nil)
+          (*print-length* nil)
+          (*print-level* nil)
+          (*print-pretty* nil)
+          (*print-radix* nil)
+          (*print-readably* t))
+      (write record :stream stream)
+      (terpri stream))))
+
 (-> generation--write-form-atomically (pathname list) pathname)
 (defun generation--write-form-atomically (pathname form)
   "Atomically write portable FORM to PATHNAME."
@@ -138,14 +218,46 @@
     (uiop:rename-file-overwriting-target temporary pathname)
     pathname))
 
-(-> generation-publish (configuration generation) generation)
-(defun generation-publish (configuration generation)
-  "Publish GENERATION's completed temporary core, manifest, and selection."
+(-> generation--validate-core-probe
+    (generation generation-core-probe-runner)
+    null)
+(defun generation--validate-core-probe (generation runner)
+  "Require RUNNER to return GENERATION's exact embedded core identity."
+  (let ((actual
+          (handler-case
+              (generation-core-probe-run runner generation)
+            (checkpoint-error (condition)
+              (error condition))
+            (error ()
+              (error 'checkpoint-error
+                     :message "The checkpoint core probe failed unexpectedly."
+                     :stage ':probe
+                     :pathname
+                     (generation-temporary-core-pathname generation))))))
+    (unless (and (stringp actual)
+                 (string= actual
+                          (generation-core-probe-output
+                           (generation-core-probe-record generation))))
+      (error 'checkpoint-error
+             :message "The checkpoint core returned the wrong generation identity."
+             :stage ':probe
+             :pathname (generation-temporary-core-pathname generation))))
+  nil)
+
+(-> generation-publish
+    (configuration generation
+     &key (:probe-runner generation-core-probe-runner))
+    generation)
+(defun generation-publish
+    (configuration generation
+     &key (probe-runner (generation-core-probe-runner-create)))
+  "Validate and publish GENERATION's temporary core, manifest, and selection."
   (unless (probe-file (generation-temporary-core-pathname generation))
     (error 'checkpoint-error
            :message "The checkpoint saver produced no core file."
            :stage ':publish
            :pathname (generation-temporary-core-pathname generation)))
+  (generation--validate-core-probe generation probe-runner)
   (uiop:rename-file-overwriting-target
    (generation-temporary-core-pathname generation)
    (generation-core-pathname generation))
@@ -446,13 +558,20 @@
 
 (-> checkpoint-resume-main () null)
 (defun checkpoint-resume-main ()
-  "Run Frob's normal entry point when a retained core is booted."
+  "Run a retained core's exact identity probe or Frob's normal entry point."
   (sb-ext:disable-debugger)
-  (restart-case
-      (main (uiop:command-line-arguments))
-    (abort ()
-      :report "Exit the retained Frob core."
-      nil))
+  (let ((arguments (uiop:command-line-arguments)))
+    (if (equal arguments (list +checkpoint-core-probe-argument+))
+        (progn
+          (write-string
+           (generation-core-probe-output *checkpoint-core-probe-record*)
+           *standard-output*)
+          (finish-output *standard-output*))
+        (restart-case
+            (main arguments)
+          (abort ()
+            :report "Exit the retained Frob core."
+            nil))))
   nil)
 
 (-> checkpoint--save-core (generation t) null)
@@ -461,7 +580,9 @@
   (handler-case
       (progn
         (setf *checkpoint-in-progress-p* nil
-              *credentials-in-request-scope* nil)
+              *credentials-in-request-scope* nil
+              *checkpoint-core-probe-record*
+              (generation-core-probe-record generation))
         (checkpoint--detach-worker worker)
         (when (boundp '*active-application*)
           (checkpoint-detach-state

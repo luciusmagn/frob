@@ -1,5 +1,61 @@
 (in-package #:frob)
 
+;;;; -- Probe Test Boundary --
+
+(defclass test-generation-core-probe-runner (generation-core-probe-runner)
+  ((output
+    :initarg :output
+    :reader test-generation-core-probe-runner-output
+    :type string
+    :documentation "The exact probe output returned without starting an SBCL core."))
+  (:documentation "A deterministic generation-core probe runner for publication tests."))
+
+(defmethod generation-core-probe-run
+    ((runner test-generation-core-probe-runner) (generation generation))
+  "Return RUNNER's configured probe output for GENERATION."
+  (declare (ignore generation))
+  (test-generation-core-probe-runner-output runner))
+
+(-> generation-tests--generation (configuration string string) generation)
+(defun generation-tests--generation (configuration identifier git-commit)
+  "Return a pending test generation named IDENTIFIER at GIT-COMMIT."
+  (let ((directory (merge-pathnames (format nil "~A/" identifier)
+                                    (generation-root configuration))))
+    (make-instance 'generation
+                   :identifier identifier
+                   :directory directory
+                   :core-pathname (merge-pathnames "frob.core" directory)
+                   :temporary-core-pathname
+                   (merge-pathnames ".frob.core.tmp" directory)
+                   :manifest-pathname
+                   (merge-pathnames "manifest.sexp" directory)
+                   :git-commit git-commit
+                   :journal-position 27
+                   :created-at 4000000000
+                   :status ':pending)))
+
+(-> generation-tests--write-fake-core (generation) pathname)
+(defun generation-tests--write-fake-core (generation)
+  "Write one deliberately non-bootable byte to GENERATION's temporary core."
+  (ensure-directories-exist (generation-temporary-core-pathname generation))
+  (with-open-file (stream (generation-temporary-core-pathname generation)
+                          :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create
+                          :element-type '(unsigned-byte 8))
+    (write-byte 42 stream))
+  (generation-temporary-core-pathname generation))
+
+(-> generation-tests--unpublished-p (configuration generation) boolean)
+(defun generation-tests--unpublished-p (configuration generation)
+  "Return true when failed GENERATION left no visible publication artifacts."
+  (and (probe-file (generation-temporary-core-pathname generation))
+       (not (probe-file (generation-core-pathname generation)))
+       (not (probe-file (generation-manifest-pathname generation)))
+       (not (probe-file (generation-current-pathname configuration)))
+       (eq (generation-status generation) ':pending)))
+
+
 ;;;; -- Subsystem Tests --
 
 (-> test-generation-manifest () null)
@@ -7,32 +63,19 @@
   "Test generation publication, loading, selection, and compatibility checks."
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
-         (directory (merge-pathnames "generation-under-test/"
-                                     (generation-root configuration)))
          (generation
-           (make-instance 'generation
-                          :identifier "generation-under-test"
-                          :directory directory
-                          :core-pathname (merge-pathnames "frob.core" directory)
-                          :temporary-core-pathname
-                          (merge-pathnames ".frob.core.tmp" directory)
-                          :manifest-pathname
-                          (merge-pathnames "manifest.sexp" directory)
-                          :git-commit "0123456789abcdef"
-                          :journal-position 27
-                          :created-at 4000000000
-                          :status ':pending)))
+           (generation-tests--generation configuration
+                                         "generation-under-test"
+                                         "0123456789abcdef"))
+         (runner
+           (make-instance
+            'test-generation-core-probe-runner
+            :output (generation-core-probe-output
+                     (generation-core-probe-record generation)))))
     (unwind-protect
          (progn
-           (ensure-directories-exist
-            (generation-temporary-core-pathname generation))
-           (with-open-file (stream (generation-temporary-core-pathname generation)
-                                   :direction :output
-                                   :if-exists :supersede
-                                   :if-does-not-exist :create
-                                   :element-type '(unsigned-byte 8))
-             (write-byte 42 stream))
-           (generation-publish configuration generation)
+           (generation-tests--write-fake-core generation)
+           (generation-publish configuration generation :probe-runner runner)
            (let ((loaded (generation-find configuration
                                           "generation-under-test")))
              (test-assert loaded
@@ -56,6 +99,54 @@
                         (generation-selected configuration))
                        "generation-under-test")
               "publication atomically selects the ready generation")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (wrong-commit
+           (generation-tests--generation configuration
+                                         "wrong-commit"
+                                         "0123456789abcdef"))
+         (other-identity
+           (generation-tests--generation configuration
+                                         "wrong-commit"
+                                         "fedcba9876543210"))
+         (wrong-runner
+           (make-instance
+            'test-generation-core-probe-runner
+            :output (generation-core-probe-output
+                     (generation-core-probe-record other-identity))))
+         (corrupt
+           (generation-tests--generation configuration
+                                         "corrupt-core"
+                                         "0123456789abcdef")))
+    (unwind-protect
+         (progn
+           (generation-tests--write-fake-core wrong-commit)
+           (test-assert
+            (handler-case
+                (progn
+                  (generation-publish configuration
+                                      wrong-commit
+                                      :probe-runner wrong-runner)
+                  nil)
+              (checkpoint-error (condition)
+                (eq (checkpoint-error-stage condition) ':probe)))
+            "publication rejects a core whose probe names another Git commit")
+           (test-assert
+            (generation-tests--unpublished-p configuration wrong-commit)
+            "a wrong probe identity leaves every publication path untouched")
+           (generation-tests--write-fake-core corrupt)
+           (test-assert
+            (handler-case
+                (progn
+                  (generation-publish configuration corrupt)
+                  nil)
+              (checkpoint-error (condition)
+                (eq (checkpoint-error-stage condition) ':probe)))
+            "the production probe rejects a corrupt fake core")
+           (test-assert
+            (generation-tests--unpublished-p configuration corrupt)
+            "a corrupt core leaves every publication path untouched"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
