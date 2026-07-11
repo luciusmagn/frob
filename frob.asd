@@ -31,6 +31,7 @@
                              (:file "generations")
                              (:file "agent")
                              (:file "terminal")
+                             (:file "terminal-style")
                              (:file "line-editor")
                              (:file "stream-terminal")
                              (:file "terminal-ui")

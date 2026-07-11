@@ -168,6 +168,7 @@
   (let ((saved-mode (terminal--terminal-mode-or-nil terminal)))
     (if (null saved-mode)
         (setf (terminal-interactive-p terminal) nil
+              (terminal-styled-p terminal) nil
               (terminal-started-p terminal) t)
         (handler-case
             (let ((active-mode
@@ -180,6 +181,7 @@
                active-mode)
               (setf (stream-terminal-saved-terminal-mode terminal) saved-mode
                     (terminal-interactive-p terminal) t
+                    (terminal-styled-p terminal) (terminal-environment-styling-p)
                     (terminal-started-p terminal) t)
               (terminal--write terminal +terminal-bracketed-paste-enable+)
               (terminal-flush terminal))
@@ -222,6 +224,7 @@
               (setf failure condition))))))
     (setf (stream-terminal-saved-terminal-mode terminal) nil
           (terminal-interactive-p terminal) nil
+          (terminal-styled-p terminal) nil
           (terminal-started-p terminal) nil)
     (when failure
       (error 'terminal-error

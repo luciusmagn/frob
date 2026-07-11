@@ -299,6 +299,64 @@
          "bracketed paste terminal controls are neutralized before display"))))
   nil)
 
+(-> test-terminal-styling-primitives () null)
+(defun test-terminal-styling-primitives ()
+  "Test semantic style resolution, span safety, clipping, and word wrapping."
+  (test-assert
+   (let ((sequence (terminal-style-sequence :dim)))
+     (and (stringp sequence)
+          (char= (char sequence 0) +terminal-escape-character+)
+          (char= (char sequence (1- (length sequence))) #\m)))
+   "semantic styles resolve to rendition controls")
+  (test-assert (null (terminal-style-sequence :plain))
+               "the plain style resolves to no control sequence")
+  (test-assert
+   (terminal-styled-text-p (list (terminal-span :brand "frob")
+                                 (terminal-span :plain " ready")))
+   "lists of spans form styled text")
+  (test-assert (not (terminal-styled-text-p (list "bare string")))
+               "bare strings are not styled text")
+  (test-assert (not (terminal-styled-text-p (terminal-span :dim "x")))
+               "a dotted span alone is not styled text")
+  (let ((clipped (terminal--clip-spans
+                  (list (terminal-span :user "abc")
+                        (terminal-span :dim "defg"))
+                  5)))
+    (test-assert
+     (equal clipped (list (terminal-span :user "abc")
+                          (terminal-span :dim "de")))
+     "span clipping preserves styles across the width boundary"))
+  (test-assert
+   (= (terminal--spans-width (list (terminal-span :user "abc")
+                                   (terminal-span :dim "de")))
+      5)
+   "span width sums sanitized cell widths")
+  (let ((hostile (terminal--clip-spans
+                  (list (terminal-span :plain
+                                       (format nil "a~C[31mb~%c"
+                                               +terminal-escape-character+)))
+                  40)))
+    (test-assert
+     (not (terminal-tests--contains-control-character-p
+           (terminal-span-text (first hostile))))
+     "span clipping neutralizes untrusted controls and newlines"))
+  (let ((cases '(("" 10 (""))
+                 ("hello" 10 ("hello"))
+                 ("aa bb" 2 ("aa" "bb"))
+                 ("ab cd" 4 ("ab" "cd"))
+                 ("abcdef" 3 ("abc" "def"))
+                 ("one two three" 7 ("one two" "three"))
+                 ("日本語" 4 ("日本" "語")))))
+    (loop for (text width expected) in cases
+          do (test-assert
+              (equal (terminal--wrap-text text width) expected)
+              (format nil "wrapping ~S at ~D produces ~S" text width expected))))
+  (test-assert
+   (equal (terminal--wrap-text (format nil "alpha~%beta gamma") 5)
+          '("alpha" "beta" "gamma"))
+   "wrapping preserves explicit line breaks before width breaks")
+  nil)
+
 (-> test-terminal-non-tty-fallback () null)
 (defun test-terminal-non-tty-fallback ()
   "Test line-oriented fallback input and output on a non-TTY descriptor."
@@ -343,5 +401,6 @@
   (test-terminal-finalized-scrollback)
   (test-terminal-line-editor)
   (test-terminal-input-decoding)
+  (test-terminal-styling-primitives)
   (test-terminal-non-tty-fallback)
   t)

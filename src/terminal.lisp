@@ -65,6 +65,12 @@
     :accessor terminal-interactive-p
     :type boolean
     :documentation "Whether this terminal currently accepts noncanonical input.")
+   (styled-p
+    :initarg :styled-p
+    :initform nil
+    :accessor terminal-styled-p
+    :type boolean
+    :documentation "Whether trusted output may include color and emphasis controls.")
    (started-p
     :initform nil
     :accessor terminal-started-p
@@ -290,6 +296,54 @@ the renderer can calculate cursor positions deterministically."
           do (incf width character-width)
              (incf end))
     (subseq text 0 end)))
+
+(-> terminal--wrap-line (string integer) list)
+(defun terminal--wrap-line (line maximum-width)
+  "Return newline-free LINE broken at spaces into rows of at most MAXIMUM-WIDTH cells."
+  (let ((width (max 1 maximum-width))
+        (segments nil)
+        (start 0))
+    (loop while (< start (length line))
+          do (let ((used 0)
+                   (end start)
+                   (break-position nil))
+               (loop while (< end (length line))
+                     for character = (char line end)
+                     for character-width = (terminal--character-width character)
+                     while (<= (+ used character-width) width)
+                     do (incf used character-width)
+                        (incf end)
+                        (when (char= character #\Space)
+                          (setf break-position end)))
+               (cond
+                 ((= end (length line))
+                  (push (subseq line start end) segments)
+                  (setf start end))
+                 ((char= (char line end) #\Space)
+                  (push (string-right-trim " " (subseq line start end)) segments)
+                  (setf start end))
+                 ((and break-position (> break-position start))
+                  (push (string-right-trim " " (subseq line start break-position))
+                        segments)
+                  (setf start break-position))
+                 (t
+                  (let ((forced-end (max (1+ start) end)))
+                    (push (subseq line start forced-end) segments)
+                    (setf start forced-end))))
+               (when (plusp start)
+                 (loop while (and (< start (length line))
+                                  (char= (char line start) #\Space))
+                       do (incf start)))))
+    (if segments
+        (nreverse segments)
+        (list ""))))
+
+(-> terminal--wrap-text (string integer) list)
+(defun terminal--wrap-text (text maximum-width)
+  "Return sanitized TEXT as a list of rows at most MAXIMUM-WIDTH cells wide."
+  (loop for line in (or (uiop:split-string text :separator '(#\Newline))
+                        (list ""))
+        append (terminal--wrap-line line maximum-width)))
 
 (-> terminal--editor-window
     (string integer integer)
