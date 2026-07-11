@@ -166,11 +166,12 @@
                            :source-path pathname)))))))
 
 (defmethod credential-source-load ((source codex-bootstrap-credential-source))
-  "Load ChatGPT OAuth material from Codex's JSON store without modifying it."
+  "Load one non-renewable ChatGPT bootstrap credential without modifying Codex."
   (let ((pathname (credential-source-pathname source)))
     (when (probe-file pathname)
       (handler-case
           (let* ((document (read-json-file-with-retry pathname))
+                 (auth-mode (json-get document "auth_mode"))
                  (tokens (json-get document "tokens"))
                  (access-token (and (json-object-p tokens)
                                     (json-get tokens "access_token")))
@@ -180,12 +181,14 @@
                                   (or (json-get tokens "account_id")
                                       (and id-token (jwt-account-id id-token))
                                       (and access-token (jwt-account-id access-token))))))
-            (when (and (non-empty-string-p access-token)
+            (when (and (stringp auth-mode)
+                       (string-equal auth-mode "chatgpt")
+                       (non-empty-string-p access-token)
                        (non-empty-string-p account-id))
               (make-instance 'oauth-credentials
                              :access-token access-token
-                             :refresh-token (json-get tokens "refresh_token")
-                             :id-token id-token
+                             :refresh-token nil
+                             :id-token nil
                              :account-id account-id
                              :expires-at (jwt-expiration access-token)
                              :source-path pathname)))
@@ -247,7 +250,12 @@
    (refresh-lock
     :initform (make-lock "Frob OAuth refresh")
     :reader credential-manager-refresh-lock
-    :documentation "The in-process serialization lock for token rotation."))
+    :documentation "The in-process serialization lock for token rotation.")
+   (account-id
+    :initform nil
+    :accessor credential-manager-account-id
+    :type (option string)
+    :documentation "The account identity pinned for this manager's lifetime."))
   (:documentation "Credential paths and refresh policy without retained tokens."))
 
 (-> credential-manager-create (configuration) credential-manager)
@@ -261,32 +269,70 @@
                                     'codex-bootstrap-credential-source
                                     :pathname (configuration-codex-auth-path configuration))))
 
+(-> credential-manager-accept-account
+    (credential-manager oauth-credentials &key (:allow-change boolean))
+    oauth-credentials)
+(defun credential-manager-accept-account (manager credentials &key allow-change)
+  "Pin CREDENTIALS' account in MANAGER, rejecting an unexplained account change."
+  (let ((expected (credential-manager-account-id manager))
+        (actual (oauth-credentials-account-id credentials)))
+    (when (and expected
+               (not allow-change)
+               (not (string= expected actual)))
+      (error 'authentication-error
+             :message "The ChatGPT credential account changed during this Frob session."))
+    (setf (credential-manager-account-id manager) actual)
+    credentials))
+
+(-> credential-manager-import-bootstrap
+    (credential-manager oauth-credentials)
+    oauth-credentials)
+(defun credential-manager-import-bootstrap (manager bootstrap)
+  "Copy BOOTSTRAP's bounded access token once into Frob's private store."
+  (when (credentials-needs-refresh-p bootstrap :window 0)
+    (error 'credentials-unavailable
+           :message "The Codex bootstrap access token expired; run frob --auth."
+           :searched-paths
+           (list (credential-source-pathname
+                  (credential-manager-bootstrap-source manager)))))
+  (let* ((primary-source (credential-manager-primary-source manager))
+         (imported
+           (make-instance 'oauth-credentials
+                          :access-token
+                          (oauth-credentials-access-token bootstrap)
+                          :refresh-token nil
+                          :id-token nil
+                          :account-id
+                          (oauth-credentials-account-id bootstrap)
+                          :expires-at
+                          (oauth-credentials-expires-at bootstrap)
+                          :source-path
+                          (credential-source-pathname primary-source))))
+    (credential-manager-accept-account manager imported)
+    (credential-source-save primary-source imported)))
+
 (-> credential-manager-load (credential-manager) oauth-credentials)
 (defun credential-manager-load (manager)
-  "Load the best currently available credentials managed by MANAGER."
-  (let* ((primary (credential-source-load
-                   (credential-manager-primary-source manager)))
-         (bootstrap (credential-source-load
-                     (credential-manager-bootstrap-source manager)))
-         (credentials
-           (cond
-             ((and bootstrap
-                   (or (null primary)
-                       (and (credentials-needs-refresh-p primary :window 0)
-                            (not (credentials-needs-refresh-p bootstrap :window 0)))))
-              bootstrap)
-             (primary
-              primary)
-             (bootstrap
-              bootstrap))))
-    (or credentials
-        (error 'credentials-unavailable
-               :message "No ChatGPT OAuth credentials are available."
-               :searched-paths
-               (list (credential-source-pathname
-                      (credential-manager-primary-source manager))
-                     (credential-source-pathname
-                      (credential-manager-bootstrap-source manager)))))))
+  "Load only Frob-owned credentials, importing Codex once when no store exists."
+  (let ((primary (credential-source-load
+                  (credential-manager-primary-source manager))))
+    (cond
+      (primary
+       (credential-manager-accept-account manager primary))
+      (t
+       (let ((bootstrap
+               (credential-source-load
+                (credential-manager-bootstrap-source manager))))
+         (if bootstrap
+             (credential-manager-import-bootstrap manager bootstrap)
+             (error 'credentials-unavailable
+                    :message
+                    "No ChatGPT OAuth credentials are available; run frob --auth."
+                    :searched-paths
+                    (list (credential-source-pathname
+                           (credential-manager-primary-source manager))
+                          (credential-source-pathname
+                           (credential-manager-bootstrap-source manager))))))))))
 
 (-> oauth-error-code (t) (option string))
 (defun oauth-error-code (body)
@@ -304,23 +350,87 @@
     (error ()
       nil)))
 
+(-> oauth-refresh-response-credentials
+    (credential-manager oauth-credentials string)
+    oauth-credentials)
+(defun oauth-refresh-response-credentials (manager credentials body)
+  "Validate refresh BODY and return account-continuous Frob credentials."
+  (handler-case
+      (let ((response (json-decode body)))
+        (unless (json-object-p response)
+          (error "The OAuth refresh root is not an object."))
+        (let* ((access-token (json-get response "access_token"))
+               (response-id-token (json-get response "id_token"))
+               (id-token (or response-id-token
+                             (oauth-credentials-id-token credentials)))
+               (rotated-refresh-token
+                 (or (json-get response "refresh_token")
+                     (oauth-credentials-refresh-token credentials))))
+          (unless (and (non-empty-string-p access-token)
+                       (or (null response-id-token)
+                           (non-empty-string-p response-id-token))
+                       (non-empty-string-p rotated-refresh-token))
+            (error "The OAuth refresh response omitted required fields."))
+          (let* ((previous-account
+                   (oauth-credentials-account-id credentials))
+                 (token-account
+                   (or (and id-token (jwt-account-id id-token))
+                       (jwt-account-id access-token)))
+                 (account-id (or token-account previous-account)))
+            (when (and token-account
+                       (not (string= token-account previous-account)))
+              (error 'token-refresh-failed
+                     :message "The OAuth refresh response changed ChatGPT accounts."
+                     :status nil
+                     :response nil))
+            (make-instance
+             'oauth-credentials
+             :access-token access-token
+             :refresh-token rotated-refresh-token
+             :id-token id-token
+             :account-id account-id
+             :expires-at (jwt-expiration access-token)
+             :source-path
+             (credential-source-pathname
+              (credential-manager-primary-source manager))))))
+    (token-refresh-failed (condition)
+      (error condition))
+    (error ()
+      (error 'token-refresh-failed
+             :message "The OAuth refresh response was malformed."
+             :status nil
+             :response nil))))
+
 (-> credential-manager-refresh (credential-manager oauth-credentials) oauth-credentials)
 (defun credential-manager-refresh (manager stale-credentials)
   "Refresh STALE-CREDENTIALS, publishing rotated tokens only to Frob's store."
   (with-lock-held ((credential-manager-refresh-lock manager))
-    (let* ((newer-bootstrap (credential-source-load
-                             (credential-manager-bootstrap-source manager)))
+    (let* ((primary-source (credential-manager-primary-source manager))
+           (bootstrap-pathname
+             (credential-source-pathname
+              (credential-manager-bootstrap-source manager)))
+           (latest (credential-source-load primary-source))
            (credentials
-             (if (and newer-bootstrap
-                      (not (string= (oauth-credentials-access-token newer-bootstrap)
-                                    (oauth-credentials-access-token stale-credentials)))
-                      (not (credentials-needs-refresh-p newer-bootstrap)))
-                 newer-bootstrap
+             (if (and latest
+                      (not (string= (oauth-credentials-access-token latest)
+                                    (oauth-credentials-access-token stale-credentials))))
+                 (credential-manager-accept-account manager latest)
                  stale-credentials))
            (refresh-token (oauth-credentials-refresh-token credentials)))
+      (when (equal (oauth-credentials-source-path credentials)
+                   bootstrap-pathname)
+        (error 'token-refresh-failed
+               :message "Codex bootstrap credentials are never refreshed by Frob."
+               :status nil
+               :response nil))
+      (when (and latest
+                 (not (string= (oauth-credentials-access-token latest)
+                               (oauth-credentials-access-token stale-credentials)))
+                 (not (credentials-needs-refresh-p latest)))
+        (return-from credential-manager-refresh credentials))
       (unless (non-empty-string-p refresh-token)
         (error 'token-refresh-failed
-               :message "The OAuth credentials do not contain a refresh token."
+               :message "These credentials cannot refresh; run frob --auth."
                :status nil
                :response nil))
       (handler-case
@@ -336,49 +446,32 @@
                         :force-string t
                         :connect-timeout 30
                         :read-timeout 60))
-                 (response (json-decode body))
-                 (access-token (json-get response "access_token"))
-                 (id-token (or (json-get response "id_token")
-                               (oauth-credentials-id-token credentials)))
-                 (rotated-refresh-token
-                   (or (json-get response "refresh_token") refresh-token))
-                 (account-id
-                   (or (and id-token (jwt-account-id id-token))
-                       (and access-token (jwt-account-id access-token))
-                       (oauth-credentials-account-id credentials)))
                  (refreshed
-                   (make-instance 'oauth-credentials
-                                  :access-token access-token
-                                  :refresh-token rotated-refresh-token
-                                  :id-token id-token
-                                  :account-id account-id
-                                  :expires-at (jwt-expiration access-token)
-                                  :source-path
-                                  (credential-source-pathname
-                                   (credential-manager-primary-source manager)))))
-            (unless (and (non-empty-string-p access-token)
-                         (non-empty-string-p account-id))
-              (error 'token-refresh-failed
-                     :message "The OAuth refresh response omitted required fields."
-                     :status nil
-                     :response nil))
-            (credential-source-save
-             (credential-manager-primary-source manager)
-             refreshed))
+                   (oauth-refresh-response-credentials
+                    manager credentials body)))
+            (credential-manager-accept-account manager refreshed)
+            (credential-source-save primary-source refreshed))
         (http-request-failed (condition)
           (let* ((body (response-body condition))
                  (code (oauth-error-code body))
-                 (latest (and (string= (or code "") "refresh_token_reused")
-                              (credential-source-load
-                               (credential-manager-bootstrap-source manager)))))
-            (if (and latest
-                     (not (string= (oauth-credentials-access-token latest)
+                 (newer-primary
+                   (and (string= (or code "") "refresh_token_reused")
+                        (credential-source-load primary-source))))
+            (if (and newer-primary
+                     (not (string= (oauth-credentials-access-token newer-primary)
                                    (oauth-credentials-access-token credentials))))
-                latest
+                (credential-manager-accept-account manager newer-primary)
                 (error 'token-refresh-failed
                        :message (format nil "OAuth token refresh failed~@[ (~A)~]." code)
                        :status (response-status condition)
-                       :response code))))))))
+                       :response code))))
+        (authentication-error (condition)
+          (error condition))
+        (error ()
+          (error 'token-refresh-failed
+                 :message "OAuth token refresh could not be completed."
+                 :status nil
+                 :response nil))))))
 
 (-> credential-manager-credentials
     (credential-manager &key (:force-refresh boolean))

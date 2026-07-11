@@ -189,12 +189,13 @@
       (device-authentication--fail
        :stage ':poll
        :message "The device authorization poll returned an invalid result."))
-    (credential-source-save
-     primary-source
-     (device-authentication--exchange-code
-      :client client
-      :authorization-code authorization-code
-      :source-path (credential-source-pathname primary-source)))
+    (let ((credentials
+            (device-authentication--exchange-code
+             :client client
+             :authorization-code authorization-code
+             :source-path (credential-source-pathname primary-source))))
+      (credential-manager-accept-account manager credentials :allow-change t)
+      (credential-source-save primary-source credentials))
     t))
 
 (defmethod device-authentication-login
