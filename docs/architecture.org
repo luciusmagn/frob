@@ -44,6 +44,11 @@ Defines credential sources and OAuth refresh. Credentials enter memory only
 inside the dynamic scope of a provider request. The Codex credential file is
 an optional bootstrap source, not a runtime dependency on Codex.
 
+** =device-authentication.lisp=
+
+Owns Frob's browser-assisted device authorization, polling, PKCE exchange, and
+publication into Frob's private credential store.
+
 ** =conversation.lisp=
 
 Owns append-only portable records and their projection into provider input.
@@ -84,6 +89,22 @@ unfinished activity may be repainted.
 Coordinates one turn at a time: persist user input, stream a response, append
 completed output items, execute tools, append their results, and continue
 until the provider completes without outstanding calls.
+
+** =generations.lisp=
+
+Owns compatible manifests and the Linux SBCL coordinator-and-saver checkpoint
+backend. Only completed temporary cores are published.
+
+** =main.lisp=
+
+Roots logical application state for checkpoints, reconnects ephemeral resources,
+projects durable records into the terminal, and wires interactive commands.
+
+** =bin/= and =recovery/=
+
+Contain the stable launcher boundary. They restore terminal state, load source
+mode, report crash context, create exact-commit recovery worktrees, and boot
+retained cores without loading damaged active source.
 
 * Durable mutation
 

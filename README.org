@@ -1,0 +1,163 @@
+#+TITLE: Frob
+#+SUBTITLE: A live, self-modifying Common Lisp agent
+#+STARTUP: content
+
+* What works
+
+Frob is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
+
+- talks directly to the ChatGPT Codex subscription Responses service;
+- defaults to =gpt-5.6-sol= with user-visible reasoning effort =ultra=;
+- owns its system prompt, conversation state, tool loop, and authentication;
+- never invokes or depends on the Codex executable;
+- keeps finalized output in normal terminal scrollback;
+- runs =lisp.*= operations in a disposable SBCL process;
+- exposes documented =self.*= inspection and mutation operations;
+- saves live SBCL generations without stopping the active parent; and
+- can boot a retained generation against its exact Git revision.
+
+The implementation follows [[file:frob-minimal-technical-spec.org][the technical specification]]. The object and
+file boundaries are summarized in [[file:docs/architecture.org][the architecture note]].
+
+* Requirements and setup
+
+The supported target is Linux x86-64 with SBCL, Git, OpenSSL, and Quicklisp.
+The currently tested SBCL is 2.6.4.
+
+Dependencies are pinned by =qlfile= and =qlfile.lock=. With Quicklisp already
+installed at =~/quicklisp=, run:
+
+#+BEGIN_SRC sh
+./bootstrap
+./check
+#+END_SRC
+
+=bootstrap= installs Qlot through Quicklisp and materializes the locked project
+dependencies under the ignored =.qlot/= directory. The launcher and check script
+prefer that project-local environment, then fall back to the user's Quicklisp.
+
+On systems where OpenSSL is outside the dynamic loader's normal search path,
+make its library directory visible to CFFI. Frob automatically adds
+=~/.guix-profile/lib/= when it exists.
+
+To make the development checkout available in =PATH=:
+
+#+BEGIN_SRC sh
+mkdir -p ~/.local/bin
+ln -sfn "$PWD/bin/frob" ~/.local/bin/frob
+#+END_SRC
+
+* Authentication
+
+Frob stores its own credentials in
+=${XDG_STATE_HOME:-~/.local/state}/frob/auth.sexp= with mode 0600.
+
+For the initial transition, Frob may read =~/.codex/auth.json= as a read-only
+bootstrap source. It never writes that file and never launches Codex. To perform
+Frob's proper device flow instead, run:
+
+#+BEGIN_SRC sh
+frob --auth
+#+END_SRC
+
+The same flow is available as =/auth= inside the application. Frob prints the
+public verification URL and one-time code, tries to open a browser, polls the
+device endpoint, performs the PKCE exchange, and writes only its private store.
+
+* Using Frob
+
+Start a new conversation with:
+
+#+BEGIN_SRC sh
+frob
+#+END_SRC
+
+The interface stays on the primary screen. Completed transcript rows are emitted
+once and remain in ordinary terminal scrollback. Only the current input and
+unfinished status rows are repainted. Model and pasted text are sanitized before
+they reach the terminal.
+
+Useful commands are:
+
+#+BEGIN_EXAMPLE
+/help                 show the command reference
+/new                  start a new conversation
+/resume ID            load a saved conversation
+/conversations         list saved conversations
+/auth                  authenticate Frob with ChatGPT
+/checkpoint            save a retained live generation
+/generations           list retained generations
+/rollback ID           select a generation for recovery
+/quit                  leave Frob
+#+END_EXAMPLE
+
+Use a double slash to send a user message that begins with a literal slash.
+
+Conversations are append-only readable forms under
+=${XDG_DATA_HOME:-~/.local/share}/frob/conversations/=. A truncated final form is
+ignored after a crash; malformed complete records are rejected.
+
+* Lisp and self tools
+
+The initial =lisp.*= tools are =eval=, =compile=, =load-system=, =describe=,
+=run-tests=, and =reset=. They use a persistent but disposable SBCL subprocess
+with a small S-expression protocol. They do not share heap objects with the
+active agent.
+
+The initial =self.*= tools inspect, evaluate, redefine, set, persist complete
+source definitions, show diffs, commit explicit paths, checkpoint, list
+generations, and select rollback generations. Durable source replacement parses
+top-level Lisp forms and never uses blind regular-expression replacement.
+
+Frob keeps all project definitions in one =FROB= package. Files and CLOS
+protocols express subsystem boundaries without scoped packages.
+
+* Generations and recovery
+
+=/checkpoint= first requires a clean Git worktree and a passing =./check=. It
+briefly excludes live mutation, revalidates the source revision, and forks a
+coordinator. The active parent resumes immediately. A saver child writes a
+temporary core, and the coordinator publishes the core and manifest only after a
+successful save.
+
+List or boot retained generations with:
+
+#+BEGIN_SRC sh
+frob --recovery --list
+frob --recovery --generation GENERATION-ID
+#+END_SRC
+
+Recovery creates a detached, clean Git worktree at the manifest's recorded
+commit and points the resumed application at that source. A fatal active-path
+failure writes a bounded crash capsule, exits with status 70, restores the
+terminal, and lets the stable launcher boot the selected generation.
+
+Saved cores are compatible only with the recorded SBCL version, operating system
+build, and architecture. Source remains authoritative for clean rebuilds.
+
+* Security status
+
+Frob is not a security sandbox. It executes model-generated Lisp and external
+commands with the privileges of the user running it. Process boundaries,
+restricted tool surfaces, append-only records, Git, and retained generations
+reduce accidental permanent damage; they do not contain malicious code.
+
+Credentials are excluded from source, conversations, journals, manifests, crash
+capsules, tool output, and saved cores. Provider objects retain credential paths,
+not token values, and checkpointing is rejected inside a credential request
+scope.
+
+* Development
+
+Run the complete test suite from the repository root:
+
+#+BEGIN_SRC sh
+./check
+#+END_SRC
+
+The suite covers request shape, SSE framing, credential storage and device auth,
+append-only conversation recovery, tool dispatch, worker evaluation, active
+definition replacement, agent tool rounds, terminal control safety, and
+generation manifests. Live smoke tests additionally cover the subscription
+transport, the isolated worker, forked checkpoint publication, and retained-core
+boot.
