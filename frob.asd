@@ -28,6 +28,7 @@
                              (:file "lisp-worker")
                              (:file "self-tools")
                              (:file "generations")
+                             (:file "agent")
                              (:file "terminal"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:frob/tests))))
 
@@ -39,6 +40,7 @@
                 :serial t
                 :components ((:file "tests")
                              (:file "device-authentication-tests")
+                             (:file "agent-tests")
                              (:file "terminal-tests"))))
   :perform (asdf:test-op (operation component)
              (declare (ignore operation component))

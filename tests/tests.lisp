@@ -392,6 +392,7 @@
     (test-self-tools)
     (test-generation-manifest)
     (run-device-authentication-tests)
+    (run-agent-tests)
     (run-terminal-tests))
   (format t "~&~:D Frob tests passed.~%" *test-count*)
   t)
