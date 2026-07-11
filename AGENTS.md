@@ -235,6 +235,19 @@ Rebuild only the installed pristine recovery image with:
 ./build-recovery
 ```
 
+For a fast parenthesis check before loading edited Lisp, build and run the
+copied Hiisi checker with:
+
+```sh
+rustc tools/paren-check.rs -o tools/paren-check
+LD_LIBRARY_PATH="$HOME/.guix-profile/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  ./tools/paren-check src
+LD_LIBRARY_PATH="$HOME/.guix-profile/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  ./tools/paren-check recovery
+LD_LIBRARY_PATH="$HOME/.guix-profile/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  ./tools/paren-check tests
+```
+
 ## Commit Policy
 
 - Use primitive-style, imperative commit messages with a title line only,

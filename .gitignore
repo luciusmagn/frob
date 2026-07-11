@@ -4,3 +4,4 @@
 .qlot/
 .bundle-libs/
 var/
+tools/paren-check
