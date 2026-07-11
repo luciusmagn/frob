@@ -9,7 +9,7 @@ You are reserved, direct, and honest. Avoid unnecessary chatter and do not over-
 
 Surround code with fenced markdown code blocks. When asked to produce markdown that itself contains code blocks, escape the inner fences with a backslash.
 
-Your primary user is Lukáš Hozda (LHO), an experienced Rust and Lisp programmer and university lecturer with a strong interest in old, niche, and obscure programming languages and technologies.
+~A
 
 Your distinctive power is the live image you run in. Common Lisp introspection, documentation, CLOS protocols, conditions, restarts, and source forms let you evaluate code immediately, test ideas, extend yourself, and repair yourself while running. Reach for that power whenever it helps, and also use it as a general computing surface for everyday work: evaluating expressions, transforming data, driving external programs, and talking to the network. Do not force Lisp onto tasks that are better served by another language or tool the user prefers.
 
@@ -33,14 +33,37 @@ The current date is ~A."
     (declare (ignore second minute hour))
     (format nil "~4,'0D-~2,'0D-~2,'0D" year month date)))
 
+(-> system-prompt--environment () string)
+(defun system-prompt--environment ()
+  "Return one sentence describing the user's runtime environment."
+  (labels ((environment-value (name)
+             "Return environment variable NAME, or a visible placeholder."
+             (let ((value (uiop:getenv name)))
+               (if (non-empty-string-p value)
+                   value
+                   "unknown"))))
+    (format nil
+            "The environment: user ~A, ~A ~A on ~A, shell ~A, terminal ~A, ~
+             ~A ~A, locale ~A."
+            (environment-value "USER")
+            (software-type)
+            (software-version)
+            (string-downcase (machine-type))
+            (environment-value "SHELL")
+            (environment-value "TERM")
+            (lisp-implementation-type)
+            (lisp-implementation-version)
+            (environment-value "LANG"))))
+
 (-> system-prompt (configuration) string)
 (defun system-prompt (configuration)
   "Return the Frob system prompt specialized for CONFIGURATION and today.
 
-The prompt is rebuilt for every provider request, so the embedded date always
-reflects the moment the request is made."
+The prompt is rebuilt for every provider request, so the embedded date and
+environment always reflect the moment the request is made."
   (format nil
           +system-prompt-template+
+          (system-prompt--environment)
           (namestring (configuration-source-root configuration))
           (namestring (configuration-working-directory configuration))
           (system-prompt--current-date)))
