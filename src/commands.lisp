@@ -24,6 +24,66 @@
                 (mapcar #'pathname-name pathnames))
         "No saved conversations exist.")))
 
+
+;;;; -- Interactive Pickers --
+
+(-> application--calendar-description (integer) string)
+(defun application--calendar-description (universal-time)
+  "Return UNIVERSAL-TIME as a compact local calendar description."
+  (multiple-value-bind (second minute hour date month year)
+      (decode-universal-time universal-time)
+    (declare (ignore second))
+    (format nil "~4,'0D-~2,'0D-~2,'0D ~2,'0D:~2,'0D"
+            year month date hour minute)))
+
+(-> application--conversation-items (application) list)
+(defun application--conversation-items (application)
+  "Return picker items for saved conversations, newest first."
+  (let ((current (conversation-identifier
+                  (application-conversation application))))
+    (loop for pathname in (conversation-list
+                           (application-configuration application))
+          for identifier = (pathname-name pathname)
+          collect (list :name identifier
+                        :argument nil
+                        :description
+                        (format nil "~A~:[~;, current~]"
+                                (application--calendar-description
+                                 (or (file-write-date pathname) 0))
+                                (string= identifier current))))))
+
+(-> application--generation-items (application) list)
+(defun application--generation-items (application)
+  "Return picker items for retained generations, newest first."
+  (loop for generation in (generation-list
+                           (application-configuration application))
+        collect (list :name (generation-identifier generation)
+                      :argument nil
+                      :description
+                      (format nil "~A~:[, incompatible~;~]"
+                              (application--calendar-description
+                               (generation-created-at generation))
+                              (generation-compatible-p generation)))))
+
+(-> application--pick-identifier
+    (application &key (:title string) (:items list) (:usage string)
+                 (:empty-notice string))
+    (option string))
+(defun application--pick-identifier
+    (application &key (title "select") items (usage "") (empty-notice ""))
+  "Pick one identifier from ITEMS interactively, or explain why none was picked.
+
+Signals a usage error on non-interactive terminals, presents EMPTY-NOTICE
+when ITEMS is empty, and returns NIL when the picker is cancelled."
+  (block nil
+    (let ((ui (application-ui application)))
+      (unless (terminal-interactive-p (terminal-ui-terminal ui))
+        (error 'configuration-error :message usage))
+      (unless items
+        (application-present application empty-notice)
+        (return nil))
+      (terminal-ui-select ui :title title :items items))))
+
 (-> application-authenticate (application) null)
 (defun application-authenticate (application)
   "Run Frob-owned device authentication outside raw terminal mode."
@@ -87,15 +147,19 @@
                  (application-conversation application))))
        :continue)
       ((string= command "/resume")
-       (unless (non-empty-string-p argument)
-         (error 'conversation-error
-                :message "Usage: /resume ID"
-                :pathname (configuration-conversation-root configuration)
-                :sequence nil))
-       (application-install-conversation
-        application
-        (conversation-load-by-id configuration argument))
-       (application-render-records application)
+       (let ((identifier
+               (or argument
+                   (application--pick-identifier
+                    application
+                    :title "resume conversation"
+                    :items (application--conversation-items application)
+                    :usage "Usage: /resume ID"
+                    :empty-notice "No saved conversations exist."))))
+         (when identifier
+           (application-install-conversation
+            application
+            (conversation-load-by-id configuration identifier))
+           (application-render-records application)))
        :continue)
       ((string= command "/conversations")
        (application-present application
@@ -112,21 +176,27 @@
                             (generation-render-list configuration))
        :continue)
       ((string= command "/rollback")
-       (unless (non-empty-string-p argument)
-         (error 'checkpoint-error
-                :message "Usage: /rollback ID"
-                :stage ':selection
-                :pathname nil))
-       (let ((generation (generation-find configuration argument)))
-         (unless generation
-           (error 'checkpoint-error
-                  :message (format nil "Unknown retained generation ~A." argument)
-                  :stage ':selection
-                  :pathname nil))
-         (generation-select configuration generation)
-         (application-present
-          application
-          (format nil "Selected ~A. Run frob --recovery to boot it." argument)))
+       (let ((identifier
+               (or argument
+                   (application--pick-identifier
+                    application
+                    :title "select a generation for recovery"
+                    :items (application--generation-items application)
+                    :usage "Usage: /rollback ID"
+                    :empty-notice "No retained generations exist."))))
+         (when identifier
+           (let ((generation (generation-find configuration identifier)))
+             (unless generation
+               (error 'checkpoint-error
+                      :message (format nil "Unknown retained generation ~A."
+                                       identifier)
+                      :stage ':selection
+                      :pathname nil))
+             (generation-select configuration generation)
+             (application-present
+              application
+              (format nil "Selected ~A. Run frob --recovery to boot it."
+                      identifier)))))
        :continue)
       (t
        (application-present application

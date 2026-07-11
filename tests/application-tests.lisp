@@ -87,9 +87,9 @@
                           "  3")
                  "trailing output newlines leave no blank body row"))
   (let ((help (application-help)))
-    (test-assert (search "/rollback ID" help)
-                 "help lists commands with their argument hints")
-    (test-assert (search "leave Frob" help)
+    (test-assert (search "/rollback" help)
+                 "help lists every interactive command")
+    (test-assert (search "pick a generation for recovery" help)
                  "help lists command descriptions"))
   nil)
 
@@ -165,9 +165,67 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-conversation-picker () null)
+(defun test-conversation-picker ()
+  "Test saved-conversation picker items and interactive selection."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((older (conversation-create configuration :identifier "older"))
+                (active (conversation-create configuration :identifier "active"))
+                (terminal (make-instance 'scripted-terminal :columns 60))
+                (application (make-instance 'application
+                                            :configuration configuration
+                                            :conversation active
+                                            :ui (terminal-ui-create
+                                                 :terminal terminal))))
+           (declare (ignore older))
+           (let ((items (application--conversation-items application)))
+             (test-assert (= (length items) 2)
+                          "every saved conversation is offered")
+             (test-assert (find "older" items
+                                :key (lambda (item)
+                                       (getf item :name))
+                                :test #'string=)
+                          "older conversations appear in the picker")
+             (test-assert (search ", current"
+                                  (getf (find "active" items
+                                              :key (lambda (item)
+                                                     (getf item :name))
+                                              :test #'string=)
+                                        :description))
+                          "the active conversation is marked current")
+             (terminal-ui-start (application-ui application))
+             (setf (scripted-terminal-events terminal) (list :submit))
+             (test-assert (string= (application--pick-identifier
+                                    application
+                                    :title "resume conversation"
+                                    :items items
+                                    :usage "Usage: /resume ID"
+                                    :empty-notice "none")
+                                   (getf (first items) :name))
+                          "enter picks the highlighted conversation")
+             (terminal-ui-stop (application-ui application))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  (let ((application (application-tests--ui-application :columns 60)))
+    (test-assert (handler-case
+                     (progn
+                       (application--pick-identifier application
+                                                     :title "resume"
+                                                     :items nil
+                                                     :usage "Usage: /resume ID"
+                                                     :empty-notice "none")
+                       nil)
+                   (configuration-error (condition)
+                     (not (null (search "Usage: /resume"
+                                        (format nil "~A" condition))))))
+                 "non-interactive pickers demand an explicit identifier"))
+  nil)
+
 (-> run-application-tests () boolean)
 (defun run-application-tests ()
   "Run focused application presentation tests and return true on success."
   (test-transcript-entries)
   (test-streaming-presentation)
+  (test-conversation-picker)
   t)

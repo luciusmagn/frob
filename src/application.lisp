@@ -60,15 +60,15 @@
 ;;;; -- Interactive Command Table --
 
 (define-constant +application-commands+
-  '((:name "/help"          :argument nil  :description "show this reference")
-    (:name "/new"           :argument nil  :description "start a new conversation")
-    (:name "/resume"        :argument "ID" :description "load a saved conversation")
-    (:name "/conversations" :argument nil  :description "list saved conversations")
-    (:name "/auth"          :argument nil  :description "authenticate Frob with ChatGPT")
-    (:name "/checkpoint"    :argument nil  :description "save a retained live generation")
-    (:name "/generations"   :argument nil  :description "list retained generations")
-    (:name "/rollback"      :argument "ID" :description "select a generation for recovery")
-    (:name "/quit"          :argument nil  :description "leave Frob"))
+  '((:name "/help"          :argument nil :description "show this reference")
+    (:name "/new"           :argument nil :description "start a new conversation")
+    (:name "/resume"        :argument nil :description "pick a saved conversation to resume")
+    (:name "/conversations" :argument nil :description "list saved conversations")
+    (:name "/auth"          :argument nil :description "authenticate Frob with ChatGPT")
+    (:name "/checkpoint"    :argument nil :description "save a retained live generation")
+    (:name "/generations"   :argument nil :description "list retained generations")
+    (:name "/rollback"      :argument nil :description "pick a generation for recovery")
+    (:name "/quit"          :argument nil :description "leave Frob"))
   :test #'equal
   :documentation "The interactive commands offered by completion and /help.")
 

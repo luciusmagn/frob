@@ -94,14 +94,17 @@ name when it still needs an argument. The commands are:
 #+BEGIN_EXAMPLE
 /help           show this reference
 /new            start a new conversation
-/resume ID      load a saved conversation
+/resume         pick a saved conversation to resume
 /conversations  list saved conversations
 /auth           authenticate Frob with ChatGPT
 /checkpoint     save a retained live generation
 /generations    list retained generations
-/rollback ID    select a generation for recovery
+/rollback       pick a generation for recovery
 /quit           leave Frob
 #+END_EXAMPLE
+
+=/resume= and =/rollback= open an interactive picker listing saved items
+newest first; both also accept an explicit identifier argument.
 
 Use a double slash to send a user message that begins with a literal slash.
 
