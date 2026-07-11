@@ -971,7 +971,8 @@ the renderer can calculate cursor positions deterministically."
      (unwind-protect
           (progn
             (terminal-ui-start ,variable)
-            ,@body)
+            (locally
+              ,@body))
        (terminal-ui-stop ,variable))))
 
 (-> terminal-ui-append-finalized (terminal-ui t string) boolean)

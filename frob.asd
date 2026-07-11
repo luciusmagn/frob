@@ -29,7 +29,8 @@
                              (:file "self-tools")
                              (:file "generations")
                              (:file "agent")
-                             (:file "terminal"))))
+                             (:file "terminal")
+                             (:file "main"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:frob/tests))))
 
 (asdf:defsystem #:frob/tests

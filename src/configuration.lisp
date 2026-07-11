@@ -113,6 +113,7 @@
          (codex-home (environment-directory
                       "CODEX_HOME"
                       (merge-pathnames ".codex/" home)))
+         (environment-source-root (uiop:getenv "FROB_SOURCE_ROOT"))
          (selected-model (or model (uiop:getenv "FROB_MODEL") +default-model+))
          (selected-effort (or reasoning-effort
                               (uiop:getenv "FROB_REASONING_EFFORT")
@@ -123,6 +124,8 @@
     (make-instance 'configuration
                    :source-root (uiop:ensure-directory-pathname
                                  (or source-root
+                                     (and (non-empty-string-p environment-source-root)
+                                          (pathname environment-source-root))
                                      (asdf:system-source-directory :frob)))
                    :working-directory (uiop:ensure-directory-pathname
                                        (or working-directory (uiop:getcwd)))
