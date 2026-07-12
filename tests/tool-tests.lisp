@@ -22,12 +22,14 @@
                                "arguments" "{}"))
                 (result (tool-registry-execute-call
                          registry unknown-call context)))
-           (test-assert (= (length (tool-registry-tools registry)) 20)
+           (test-assert (= (length (tool-registry-tools registry)) 22)
                         "the default registry exposes the complete initial tool set")
            (test-assert (= (length schemas) 4)
                         "the provider schemas contain four namespaces")
            (test-assert (string= (json-get (aref schemas 0) "name") "fs")
                         "the workspace filesystem namespace is first")
+           (test-assert (= (length (json-get (aref schemas 0) "tools")) 4)
+                        "the fs namespace exposes four workspace operations")
            (test-assert (string= (json-get (aref schemas 1) "name") "shell")
                         "the workspace shell namespace is second")
            (test-assert (string= (json-get (aref schemas 2) "name") "lisp")
@@ -119,6 +121,56 @@
                             "shell.run stops runaway commands")
                (test-assert (search "stopped after 1"
                                     (tool-result-content result))
-                            "shell.run explains its timeout"))))
+                            "shell.run explains its timeout"))
+             (let ((target (merge-pathnames "written.txt" root)))
+               (test-assert (tool-result-success-p
+                             (run "fs" "write"
+                                  "path" (namestring target)
+                                  "content" (format nil "alpha beta~%alpha")))
+                            "fs.write creates new files")
+               (test-assert (search "alpha beta"
+                                    (uiop:read-file-string target))
+                            "fs.write stores the supplied content")
+               (test-assert (not (tool-result-success-p
+                                  (run "fs" "edit"
+                                       "path" (namestring target)
+                                       "old-text" "alpha"
+                                       "new-text" "gamma")))
+                            "ambiguous fs.edit matches are rejected")
+               (test-assert (tool-result-success-p
+                             (run "fs" "edit"
+                                  "path" (namestring target)
+                                  "old-text" "alpha"
+                                  "new-text" "gamma"
+                                  "replace-all" t))
+                            "fs.edit replaces everywhere when asked")
+               (test-assert (string= (uiop:read-file-string target)
+                                     (format nil "gamma beta~%gamma"))
+                            "fs.edit rewrites exactly the matched text")
+               (test-assert (not (tool-result-success-p
+                                  (run "fs" "edit"
+                                       "path" (namestring target)
+                                       "old-text" "missing text"
+                                       "new-text" "x")))
+                            "fs.edit fails cleanly when old-text is absent"))
+             (test-assert (not (tool-result-success-p
+                                (run "fs" "write"
+                                     "path" (namestring
+                                             (merge-pathnames
+                                              "bin/frob"
+                                              (configuration-source-root
+                                               configuration)))
+                                     "content" "overwritten")))
+                          "fs.write refuses the stable launcher")
+             (test-assert (not (tool-result-success-p
+                                (run "fs" "edit"
+                                     "path" (namestring
+                                             (merge-pathnames
+                                              "recovery/runtime.lisp"
+                                              (configuration-source-root
+                                               configuration)))
+                                     "old-text" "frob"
+                                     "new-text" "borf")))
+                          "fs.edit refuses recovery artifacts")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

@@ -144,10 +144,15 @@ ignored after a crash; malformed complete records are rejected.
 
 The =fs.*= and =shell.*= tools cover everyday workspace work: =fs.read=
 returns numbered file lines from an optional window, =fs.list= lists one
-directory with entry kinds and sizes, and =shell.run= executes one external
-command with a bounded timeout and combined output. They run in the active
-process but touch only files and subprocesses, never the Lisp heap, so the
-model does not need =self.eval= to look around.
+directory with entry kinds and sizes, =fs.write= creates or replaces a file,
+=fs.edit= replaces exact text with a uniqueness check, and =shell.run=
+executes one external command with a bounded timeout and combined output.
+They run in the active process but touch only files and subprocesses, never
+the Lisp heap, so the model does not need =self.eval= to look around. The
+stable launcher and recovery artifacts stay read-only through these tools.
+
+When the workspace contains an =AGENTS.md=, its contents ride along in the
+system prompt automatically, bounded and refreshed on every request.
 
 The initial =lisp.*= tools are =eval=, =compile=, =load-system=, =describe=,
 =run-tests=, and =reset=. They use a persistent but disposable SBCL subprocess

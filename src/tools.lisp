@@ -133,6 +133,11 @@
   "Return a documented JSON integer property schema."
   (json-object "type" "integer" "description" description))
 
+(-> tool-boolean-property (string) json-object)
+(defun tool-boolean-property (description)
+  "Return a documented JSON boolean property schema."
+  (json-object "type" "boolean" "description" description))
+
 (-> tool-namespace-description (string) string)
 (defun tool-namespace-description (namespace)
   "Return the model-visible description of tool NAMESPACE."
@@ -370,6 +375,30 @@
                   "path" (tool-string-property
                           "The directory path; defaults to the workspace."))
                  nil))
+      (register 'fs-write-tool
+                "fs" "write"
+                "Create or replace one workspace file with the supplied content."
+                (tool-object-schema
+                 (json-object
+                  "path" (tool-string-property
+                          "The file path, absolute or workspace-relative.")
+                  "content" (tool-string-property
+                             "The complete new file content."))
+                 '("path" "content")))
+      (register 'fs-edit-tool
+                "fs" "edit"
+                "Replace one exact text occurrence inside a workspace file."
+                (tool-object-schema
+                 (json-object
+                  "path" (tool-string-property
+                          "The file path, absolute or workspace-relative.")
+                  "old-text" (tool-string-property
+                              "The exact existing text to replace; include enough context to be unique.")
+                  "new-text" (tool-string-property
+                              "The replacement text.")
+                  "replace-all" (tool-boolean-property
+                                 "Replace every occurrence instead of requiring a unique match."))
+                 '("path" "old-text" "new-text")))
       (register 'shell-run-tool
                 "shell" "run"
                 "Run one external command line in the workspace and return its exit code and combined output."

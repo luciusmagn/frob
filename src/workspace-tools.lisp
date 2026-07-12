@@ -15,6 +15,14 @@
   ()
   (:documentation "List one workspace directory with entry kinds and sizes."))
 
+(defclass fs-write-tool (workspace-tool)
+  ()
+  (:documentation "Create or replace one workspace file with supplied content."))
+
+(defclass fs-edit-tool (workspace-tool)
+  ()
+  (:documentation "Replace exact text occurrences inside one workspace file."))
+
 (defclass shell-run-tool (workspace-tool)
   ()
   (:documentation "Run one bounded external command in the workspace."))
@@ -42,6 +50,19 @@
     (if (non-empty-string-p path)
         (merge-pathnames (pathname path) working-directory)
         working-directory)))
+
+(-> workspace-tool-protected-path-p (tool-context pathname) boolean)
+(defun workspace-tool-protected-path-p (context path)
+  "Return true when PATH is a stable launcher or recovery artifact."
+  (let* ((source-root (configuration-source-root
+                       (tool-context-configuration context)))
+         (launcher-root (merge-pathnames "bin/" source-root))
+         (recovery-root (merge-pathnames "recovery/" source-root)))
+    (and (uiop:subpathp path source-root)
+         (or (uiop:subpathp path launcher-root)
+             (uiop:subpathp path recovery-root)
+             (string= (enough-namestring path source-root) "build-recovery"))
+         t)))
 
 (-> workspace-tool-integer-argument
     (json-object string &key (:fallback (option integer)))
@@ -133,6 +154,117 @@
                                            (error ()
                                              0))
                                          (file-namestring file)))))))))
+
+(-> workspace--count-occurrences (string string) (integer 0))
+(defun workspace--count-occurrences (needle haystack)
+  "Return the number of non-overlapping NEEDLE occurrences in HAYSTACK."
+  (loop with start = 0
+        for position = (search needle haystack :start2 start)
+        while position
+        count t
+        do (setf start (+ position (length needle)))))
+
+(-> workspace--replace-occurrences
+    (string string string &key (:all boolean))
+    string)
+(defun workspace--replace-occurrences (needle replacement haystack &key all)
+  "Return HAYSTACK with NEEDLE replaced by REPLACEMENT, once or everywhere."
+  (with-output-to-string (stream)
+    (loop with start = 0
+          for position = (search needle haystack :start2 start)
+          while position
+          do (write-string haystack stream :start start :end position)
+             (write-string replacement stream)
+             (setf start (+ position (length needle)))
+          unless all
+            do (loop-finish)
+          finally (write-string haystack stream :start start))))
+
+(defmethod tool-execute ((tool fs-write-tool)
+                         (context tool-context)
+                         (arguments hash-table))
+  "Create or replace the requested file with the supplied content."
+  (let ((path (workspace-tool-path
+               context
+               (tool-argument arguments "path" :required t)))
+        (content (tool-argument arguments "content" :required t)))
+    (unless (stringp content)
+      (error 'tool-error
+             :message "fs.write requires string content."
+             :tool-name "fs.write"))
+    (cond
+      ((workspace-tool-protected-path-p context path)
+       (tool-failure
+        (format nil "~A is a protected launcher or recovery artifact." path)))
+      ((uiop:directory-exists-p path)
+       (tool-failure (format nil "~A is a directory." path)))
+      (t
+       (let ((existed-p (and (probe-file path) t)))
+         (ensure-directories-exist path)
+         (with-open-file (stream path
+                                 :direction :output
+                                 :if-exists :supersede
+                                 :if-does-not-exist :create
+                                 :external-format :utf-8)
+           (write-string content stream))
+         (tool-success
+          (format nil "~:[Created~;Replaced~] ~A with ~:D character~:P."
+                  existed-p
+                  path
+                  (length content))))))))
+
+(defmethod tool-execute ((tool fs-edit-tool)
+                         (context tool-context)
+                         (arguments hash-table))
+  "Replace exact occurrences of old-text inside the requested file."
+  (let ((path (workspace-tool-path
+               context
+               (tool-argument arguments "path" :required t)))
+        (old-text (tool-argument arguments "old-text" :required t))
+        (new-text (tool-argument arguments "new-text" :required t))
+        (replace-all (tool-argument arguments "replace-all")))
+    (unless (and (stringp old-text) (stringp new-text))
+      (error 'tool-error
+             :message "fs.edit requires string old-text and new-text."
+             :tool-name "fs.edit"))
+    (cond
+      ((zerop (length old-text))
+       (tool-failure "fs.edit requires non-empty old-text."))
+      ((workspace-tool-protected-path-p context path)
+       (tool-failure
+        (format nil "~A is a protected launcher or recovery artifact." path)))
+      ((or (uiop:directory-exists-p path) (not (probe-file path)))
+       (tool-failure (format nil "~A is not an existing file." path)))
+      (t
+       (let* ((text (uiop:read-file-string path))
+              (occurrences (workspace--count-occurrences old-text text)))
+         (cond
+           ((zerop occurrences)
+            (tool-failure
+             (format nil "The old-text was not found in ~A." path)))
+           ((and (> occurrences 1) (not replace-all))
+            (tool-failure
+             (format nil "The old-text matches ~D times in ~A; include more ~
+                          context or set replace-all."
+                     occurrences
+                     path)))
+           (t
+            (with-open-file (stream path
+                                    :direction :output
+                                    :if-exists :supersede
+                                    :external-format :utf-8)
+              (write-string (workspace--replace-occurrences
+                             old-text
+                             new-text
+                             text
+                             :all (and replace-all t))
+                            stream))
+            (tool-success
+             (format nil "Replaced ~D occurrence~:P in ~A."
+                     (if replace-all
+                         occurrences
+                         1)
+                     path)))))))))
 
 (defmethod tool-execute ((tool shell-run-tool)
                          (context tool-context)
