@@ -176,10 +176,17 @@ with a small S-expression protocol. They do not share heap objects with the
 active agent.
 
 The initial =self.*= tools inspect bindings, read tracked definitions, evaluate,
-redefine, set, persist complete
-source definitions, show diffs, commit explicit paths, checkpoint, list
-generations, and request immediate rollback. Durable source replacement parses
-top-level Lisp forms and never uses blind regular-expression replacement.
+redefine, set, persist complete definitions, show diffs, commit explicit paths,
+checkpoint, list generations, and request immediate rollback.
+
+Durable self-modifications never patch the tracked repository. Instead,
+=self.persist-definition= writes each complete top-level definition to an
+overlay file under =${XDG_DATA_HOME:-~/.local/share}/frob/overlays/=, and every
+startup loads the overlays after the tracked system. A broken overlay is
+skipped with a visible notice instead of blocking startup. The =fs.write= and
+=fs.edit= tools refuse Frob's own tracked source entirely, and repository
+commits stay with the user; =self.commit= remains for explicitly
+user-directed commits.
 
 Frob keeps all project definitions in one =FROB= package. Files and CLOS
 protocols express subsystem boundaries without scoped packages.

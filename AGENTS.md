@@ -60,9 +60,12 @@ For a durable live mutation, preserve the specified order:
 1. Journal the intended mutation.
 2. Compile and install it in the active image.
 3. Run relevant checks.
-4. Write the corresponding source form.
-5. Commit the source change.
-6. Mark the journal entry durable.
+4. Persist the complete definition to an overlay file under the data root.
+5. Mark the journal entry durable.
+
+Frob's runtime never patches its own tracked repository; overlays load at
+startup after the tracked system, and repository changes remain with the
+user and their development tools.
 
 Conversation files and mutation journals are append-only sequences of
 top-level readable forms. Bind `*read-eval*` to `nil` when reading persisted

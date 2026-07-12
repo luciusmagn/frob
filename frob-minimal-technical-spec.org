@@ -197,18 +197,21 @@ A durable change normally follows this sequence:
 1. Record the intended mutation in the mutation journal.
 2. Compile and install the change in the active image.
 3. Run relevant checks.
-4. Write the corresponding source representation.
-5. Commit the source change to Git.
-6. Mark the journal entry as durable.
+4. Persist the complete definition to an overlay file under the data
+   root.
+5. Mark the journal entry as durable.
 
-Source edits should operate on Lisp forms rather than use blind regular
-expression replacement.
+Overlay files hold complete top-level definitions and load at startup
+after the tracked system. The agent never patches the tracked source
+repository; repository changes remain with the user and their
+development tools.
 
-The first version may replace complete top-level definitions. Exact
-comment- and whitespace-preserving CST editing is optional.
+Persisted definitions are complete Lisp forms rather than blind textual
+patches.
 
-Source remains authoritative for clean rebuilds. Saved cores preserve
-the exact live state of a working generation.
+The tracked source remains authoritative for clean rebuilds of the base
+system, extended by the overlays. Saved cores preserve the exact live
+state of a working generation.
 
 * 7. Conditions and Restarts
 
