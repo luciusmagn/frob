@@ -257,6 +257,18 @@
                                      configuration)))
                                   (getf (first items) :description))
                           "picker items show the conversation origin directory")
+             (conversation-append-user-message
+              active
+              "please refresh the transcript colors")
+             (test-assert
+              (search "· please refresh the transcript colors"
+                      (getf (find "active"
+                                  (application--conversation-items application)
+                                  :key (lambda (item)
+                                         (getf item :name))
+                                  :test #'string=)
+                            :description))
+              "picker items preview the newest message")
              (terminal-ui-start (application-ui application))
              (setf (scripted-terminal-events terminal) (list :submit))
              (test-assert (string= (application--pick-identifier

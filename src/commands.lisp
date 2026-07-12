@@ -192,6 +192,36 @@
           (concatenate 'string "~/" (subseq namestring (length home)))
           namestring))))
 
+(define-constant +conversation-preview-width+ 48
+  :documentation "The cell width of the newest-message excerpt in pickers.")
+
+(-> application--conversation-preview (pathname) (option string))
+(defun application--conversation-preview (pathname)
+  "Return a one-line excerpt of PATHNAME's newest user or assistant message."
+  (handler-case
+      (let ((preview nil))
+        (dolist (record (rest (conversation--read-records pathname)))
+          (case (first record)
+            (:message
+             (let ((content (getf (rest record) :content)))
+               (when (and (eq (getf (rest record) :role) :user)
+                          (stringp content))
+                 (setf preview content))))
+            (:provider-item
+             (let ((wire-json (getf (rest record) :wire-json)))
+               (when (stringp wire-json)
+                 (let ((item (json-decode wire-json)))
+                   (when (json-object-p item)
+                     (let ((text (response-item-assistant-text item)))
+                       (when text
+                         (setf preview text))))))))))
+        (when preview
+          (terminal--prefix-within-width
+           (terminal-sanitize-text preview :single-line-p t)
+           +conversation-preview-width+)))
+    (error ()
+      nil)))
+
 (-> application--conversation-items (application) list)
 (defun application--conversation-items (application)
   "Return picker items for saved conversations, newest first."
@@ -204,12 +234,14 @@
           collect (list :name identifier
                         :argument nil
                         :description
-                        (format nil "~A~@[, ~A~]~:[~;, current~]"
+                        (format nil "~A~@[, ~A~]~:[~;, current~]~@[ · ~A~]"
                                 (application--calendar-description
                                  (or (file-write-date pathname) 0))
                                 (application--abbreviated-directory
                                  (getf (rest header) :directory))
-                                (string= identifier current))))))
+                                (string= identifier current)
+                                (application--conversation-preview
+                                 pathname))))))
 
 (-> application--effort-items (application) list)
 (defun application--effort-items (application)
