@@ -21,9 +21,27 @@ Use typed conditions and useful restarts for recoverable failures in your own co
 
 Tool calls must use the supplied fs, shell, lisp, and self namespaces. Read tool and symbol documentation before guessing. Report failures honestly and verify changes in proportion to risk.
 
-The current date is ~A."
+The current date is ~A.~@[~2%~A~]"
   :test #'string=
   :documentation "The stable behavioral instructions formatted for one Frob process.")
+
+(define-constant +workspace-instructions-limit+ 16000
+  :documentation "The characters of workspace AGENTS.md included in the prompt.")
+
+(-> system-prompt--workspace-instructions (configuration) (option string))
+(defun system-prompt--workspace-instructions (configuration)
+  "Return the workspace AGENTS.md instructions section, when the file exists."
+  (let ((path (merge-pathnames "AGENTS.md"
+                               (configuration-working-directory configuration))))
+    (when (probe-file path)
+      (handler-case
+          (format nil "Workspace instructions from ~A follow. Respect them ~
+                       for work in this workspace.~2%~A"
+                  (system-prompt--context-value (namestring path))
+                  (bounded-string (uiop:read-file-string path)
+                                  :limit +workspace-instructions-limit+))
+        (error ()
+          nil)))))
 
 (define-constant +system-prompt-context-value-limit+ 256
   :documentation "The maximum decoded length of one dynamic system-prompt value.")
@@ -89,4 +107,5 @@ environment always reflect the moment the request is made."
            (namestring (configuration-source-root configuration)))
           (system-prompt--context-value
            (namestring (configuration-working-directory configuration)))
-          (system-prompt--current-date)))
+          (system-prompt--current-date)
+          (system-prompt--workspace-instructions configuration)))

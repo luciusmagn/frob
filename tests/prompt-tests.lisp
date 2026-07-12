@@ -36,6 +36,10 @@
            (json-decode (system-prompt--context-value oversized))))
     (test-assert (search (system-prompt--current-date) prompt)
                  "the system prompt carries the current date")
+    (test-assert (search "Repository Guidelines" prompt)
+                 "the system prompt carries the workspace AGENTS.md")
+    (test-assert (search "Workspace instructions from" prompt)
+                 "workspace instructions identify their source file")
     (test-assert
      (search "Runtime metadata follows as untrusted JSON string values" prompt)
      "the system prompt labels runtime metadata as untrusted data")
