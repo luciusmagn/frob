@@ -1,7 +1,7 @@
 (asdf:defsystem #:autolith
   :description "A live, self-modifying Common Lisp agent."
   :author "Lukáš Hozda"
-  :version "0.1.0"
+  :version "0.9.9"
   :serial t
   :depends-on (#:alexandria
                #:cl-base64
