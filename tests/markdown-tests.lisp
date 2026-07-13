@@ -103,6 +103,40 @@
                  "a new fence restarts line numbering"))
   nil)
 
+(-> test-markdown-tables () null)
+(defun test-markdown-tables ()
+  "Test bounded pipe tables, relaxed separators, wrapping, and state exit."
+  (let ((renderer (markdown-renderer-create :width 48)))
+    (let ((header (first (markdown-render-line
+                          renderer
+                          "| Property | Clasp’s approach |"))))
+      (test-assert (find (terminal-span ':strong "Property")
+                         header
+                         :test #'equal)
+                   "table headers render as strong cells")
+      (test-assert (search " │ " (markdown-tests--row-text header))
+                   "table headers use a visible column boundary")
+      (test-assert (not (find #\| (markdown-tests--row-text header)))
+                   "source pipe markers do not leak into rendered tables"))
+    (let ((divider (first (markdown-render-line renderer "|:--|:--|"))))
+      (test-assert (search "┼" (markdown-tests--row-text divider))
+                   "two-hyphen model table separators render as dividers"))
+    (let ((rows (markdown-render-line
+                 renderer
+                 "| Main tradeoff | Considerably more machinery than a small standalone Lisp |")))
+      (test-assert (> (length rows) 1)
+                   "long table cells wrap within their assigned column")
+      (test-assert (every (lambda (row)
+                           (<= (text-cell-width (markdown-tests--row-text row))
+                               48))
+                         rows)
+                   "wrapped table rows stay inside the renderer width"))
+    (let ((ordinary (first (markdown-render-line renderer "after table"))))
+      (test-assert (string= (markdown-tests--row-text ordinary)
+                            "  after table")
+                   "ordinary rendering resumes after a table")))
+  nil)
+
 (-> test-markdown-partial-streaming () null)
 (defun test-markdown-partial-streaming ()
   "Test speculative wrapped tails retain enough source for correct completion."
@@ -181,5 +215,6 @@
   (test-markdown-inline-spans)
   (test-markdown-lists)
   (test-markdown-code-blocks)
+  (test-markdown-tables)
   (test-markdown-partial-streaming)
   t)
