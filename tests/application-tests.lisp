@@ -27,9 +27,9 @@
                 (wordmark (terminal-span-text (first spans)))
                 (text (format nil "~{~A~}"
                               (mapcar #'terminal-span-text spans))))
-           (test-assert (and (search "█" wordmark)
-                             (= (count #\Newline wordmark) 5))
-                        "the startup banner uses a multiline block wordmark")
+           (test-assert (and (search "#######" wordmark)
+                             (>= (count #\Newline wordmark) 7))
+                        "the startup banner uses a multiline FIGlet wordmark")
            (test-assert (search "AUTOLITH" text)
                         "the startup banner names Autolith")
            (test-assert (search (format nil "v~A" +autolith-version+) text)

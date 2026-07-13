@@ -10,16 +10,19 @@
     (append
      (list (terminal-span
             :brand
+            ;; Generated with FIGlet's banner font and embedded for fast startup.
             (format nil
                     "~{~A~%~}"
-                    '(" ██  █  █ ████  ██  █    ████ ████ █  █"
-                      "█  █ █  █  ██  █  █ █     ██   ██  █  █"
-                      "████ █  █  ██  █  █ █     ██   ██  ████"
-                      "█  █ █  █  ██  █  █ █     ██   ██  █  █"
-                      "█  █  ██   ██   ██  ████ ████  ██  █  █")))
+                    '("   #    #     # ####### ####### #       ### ####### #     #"
+                      "  # #   #     #    #    #     # #        #     #    #     #"
+                      " #   #  #     #    #    #     # #        #     #    #     #"
+                      "#     # #     #    #    #     # #        #     #    #######"
+                      "####### #     #    #    #     # #        #     #    #     #"
+                      "#     # #     #    #    #     # #        #     #    #     #"
+                      "#     #  #####     #    ####### ####### ###    #    #     #")))
            (terminal-span
             :dim
-            (format nil "AUTOLITH // LIVE COMMON LISP // v~A~%~%"
+            (format nil "AUTOLITH  v~A~%~%"
                     +autolith-version+)))
      (application--field-spans "model"
                                (format nil "~A (effort ~A)"
