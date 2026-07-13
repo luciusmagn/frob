@@ -488,6 +488,7 @@
   (let* ((terminal (make-instance 'recording-terminal :columns 40))
          (ui (terminal-ui-create :terminal terminal :placeholder "hint")))
     (with-terminal-ui (active-ui ui)
+      (terminal-ui-set-cursor-visible active-ui nil)
       (recording-terminal-reset terminal)
       (terminal-ui-stream-update
        active-ui
@@ -501,6 +502,11 @@
                      "streamed rows append committed lines")
         (test-assert (search "  partial" output)
                      "the fluid tail is painted live")
+        (test-assert
+         (zerop (terminal-tests--substring-count
+                 (format nil "~C[?25h" +terminal-escape-character+)
+                 output))
+         "streaming leaves cursor motion hidden")
         (test-assert (not (terminal-tests--forbidden-control-p output))
                      "streamed rows never erase the display"))
       (recording-terminal-reset terminal)
@@ -508,7 +514,11 @@
       (test-assert (not (search "partial" (recording-terminal-output terminal)))
                    "completing a block removes the fluid tail")
       (test-assert (null (terminal-ui-stream-tail active-ui))
-                   "a completed block clears the stored tail")))
+                   "a completed block clears the stored tail")
+      (terminal-ui-set-cursor-visible active-ui t)
+      (test-assert (live-region-cursor-visible-p
+                    (terminal-ui-live-region active-ui))
+                   "the input cursor can be restored after streaming")))
   nil)
 
 (-> test-terminal-command-completion () null)

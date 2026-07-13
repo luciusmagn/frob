@@ -10,6 +10,31 @@
                       :terminal (make-instance 'recording-terminal
                                                :columns columns))))
 
+(defclass cursor-observing-provider (scripted-provider)
+  ((visibility-function
+    :initarg :visibility-function
+    :reader cursor-observing-provider-visibility-function
+    :type function
+    :documentation "Function reporting live-region cursor visibility.")
+   (visible-during-request-p
+    :initform t
+    :accessor cursor-observing-provider-visible-during-request-p
+    :type boolean
+    :documentation "Cursor visibility observed when a provider request begins."))
+  (:documentation "A scripted provider recording cursor state during a request."))
+
+(defmethod provider-stream-turn :before
+    ((provider cursor-observing-provider)
+     (conversation conversation)
+     (tool-namespaces vector)
+     (event-callback function)
+     &key turn-budget-state goal-context compaction-p)
+  "Record cursor visibility immediately before PROVIDER starts streaming."
+  (declare (ignore conversation tool-namespaces event-callback
+                   turn-budget-state goal-context compaction-p))
+  (setf (cursor-observing-provider-visible-during-request-p provider)
+        (funcall (cursor-observing-provider-visibility-function provider))))
+
 
 ;;;; -- Focused Presentation Tests --
 
@@ -329,6 +354,67 @@
                         "streamed code blocks render numbered gutters")
            (funcall send-status :provider-request-completed nil)
            (terminal-ui-stop (application-ui application)))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-turn-cursor-visibility () null)
+(defun test-turn-cursor-visibility ()
+  "Test model turns hide cursor motion and restore the input cursor afterward."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation (conversation-create configuration
+                                                   :identifier "cursor-turn"))
+                (terminal (make-instance 'recording-terminal :columns 50))
+                (ui (terminal-ui-create :terminal terminal))
+                (provider
+                  (make-instance
+                   'cursor-observing-provider
+                   :visibility-function
+                   (lambda ()
+                     (live-region-cursor-visible-p
+                      (terminal-ui-live-region ui)))
+                   :results
+                   (list
+                    (agent-test-result
+                     "cursor-response"
+                     (list (agent-test-message "finished"))
+                     :turn-completion :end))))
+                (registry (make-instance 'tool-registry))
+                (agent (agent-create :configuration configuration
+                                     :provider provider
+                                     :conversation conversation
+                                     :tool-registry registry
+                                     :worker t))
+                (application (make-instance 'application
+                                            :configuration configuration
+                                            :conversation conversation
+                                            :provider provider
+                                            :tool-registry registry
+                                            :worker t
+                                            :agent agent
+                                            :ui ui)))
+           (with-terminal-ui (active-ui ui)
+             (declare (ignore active-ui))
+             (recording-terminal-reset terminal)
+             (application--run-turn application "hello")
+             (test-assert
+              (not (cursor-observing-provider-visible-during-request-p
+                    provider))
+              "the cursor is hidden before the provider starts streaming")
+             (test-assert
+              (live-region-cursor-visible-p (terminal-ui-live-region ui))
+              "the input cursor is restored after the model turn")
+             (let* ((output (recording-terminal-output terminal))
+                    (show (format nil "~C[?25h"
+                                  +terminal-escape-character+)))
+               (test-assert
+                (= (terminal-tests--substring-count show output) 1)
+                "one cursor reveal follows the complete model turn")
+               (test-assert
+                (< (or (search "finished" output) most-positive-fixnum)
+                   (or (search show output :from-end t) -1))
+                "the cursor is revealed only after the final answer is painted"))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -706,6 +792,7 @@
   (test-interrupt-resume-instruction)
   (test-transcript-entries)
   (test-streaming-presentation)
+  (test-turn-cursor-visibility)
   (test-conversation-picker)
   (test-effort-switch)
   (test-status-entry)

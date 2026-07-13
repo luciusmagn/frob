@@ -768,26 +768,27 @@ later conversation replay cannot duplicate their streamed transcript rows."
     (application string &key (:continuation-p boolean))
     null)
 (defun application--run-turn (application content &key continuation-p)
-  "Persist and run one model turn for CONTENT, presenting durable results once."
+  "Persist and run one model turn for CONTENT with cursor motion hidden."
   (let* ((conversation (application-conversation application))
+         (ui (application-ui application))
          (sequence (conversation-next-sequence conversation))
          (identifier (list :conversation
                            (conversation-identifier conversation)
                            sequence)))
-    (terminal-ui-append-finalized
-     (application-ui application)
-     identifier
-     (if continuation-p
-         (list (terminal-span ':hint "∙ goal continues"))
-         (application--transcript-entry application
-                                        :style ':user
-                                        :header "❯ you"
-                                        :body content)))
-    (setf (application-rendered-sequence application) sequence)
+    (terminal-ui-set-cursor-visible ui nil)
     (unwind-protect
          (progn
-           (terminal-ui-set-status (application-ui application)
-                                   (application-thinking-label))
+           (terminal-ui-append-finalized
+            ui
+            identifier
+            (if continuation-p
+                (list (terminal-span ':hint "∙ goal continues"))
+                (application--transcript-entry application
+                                               :style ':user
+                                               :header "❯ you"
+                                               :body content)))
+           (setf (application-rendered-sequence application) sequence)
+           (terminal-ui-set-status ui (application-thinking-label))
            (application--note-goal-turn
             application
             (agent-run-user-turn
@@ -795,9 +796,12 @@ later conversation replay cannot duplicate their streamed transcript rows."
              content
              :observer (application-agent-observer application)
              :goal-context (application-goal-context application))))
-      (terminal-ui-set-status (application-ui application) nil)
-      (terminal-ui-stream-update (application-ui application) :tail nil)
-      (application-render-records application)))
+      (unwind-protect
+           (progn
+             (terminal-ui-set-status ui nil)
+             (terminal-ui-stream-update ui :tail nil)
+             (application-render-records application))
+        (terminal-ui-set-cursor-visible ui t))))
   nil)
 
 (-> application--run-goal-continuations (application) null)

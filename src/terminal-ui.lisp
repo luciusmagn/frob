@@ -589,6 +589,13 @@ when no resize needs to be applied."
       (terminal-ui--paint-live ui)))
   ui)
 
+(-> terminal-ui-set-cursor-visible (terminal-ui boolean) terminal-ui)
+(defun terminal-ui-set-cursor-visible (ui visible-p)
+  "Set whether UI leaves its input cursor visible between terminal updates."
+  (when (terminal-interactive-p (terminal-ui-terminal ui))
+    (live-region-set-cursor-visible (terminal-ui-live-region ui) visible-p))
+  ui)
+
 (-> terminal-ui-resize
     (terminal-ui integer &key (:rows (option integer)))
     terminal-ui)
