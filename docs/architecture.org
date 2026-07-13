@@ -93,8 +93,10 @@ alternate screen and never clears scrollback. Only the bounded live region,
 holding the unfinished status row, the padded prompt row, and any command
 completion suggestions, may be repainted. The startup identity uses a
 capability-checked xterm-256 green gradient with bold basic-green fallback;
-other semantic styles resolve to basic terminal palette colors and emphasis.
-Untrusted text is sanitized before trusted styling controls are added around it.
+one leading blank row and a divider separate its identity from model and
+workspace metadata. Internal conversation identifiers are omitted. Other
+semantic styles resolve to basic terminal palette colors and emphasis. Untrusted
+text is sanitized before trusted styling controls are added around it.
 
 ** =agent.lisp=
 

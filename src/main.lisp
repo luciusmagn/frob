@@ -41,25 +41,34 @@
   (list (terminal-span :dim (format nil "~12A  " label))
         (terminal-span :plain value)))
 
-(-> application--banner-metadata-rows (application) list)
-(defun application--banner-metadata-rows (application)
-  "Return the identity and current-session rows shown beside the startup mark."
-  (let ((configuration (application-configuration application))
-        (conversation (application-conversation application)))
-    (list
-     (list (terminal-span :strong "AUTOLITH")
-           (terminal-span :dim (format nil " v~A" +autolith-version+)))
-     (application--banner-metadata-field
-      "model"
-      (format nil "~A (effort ~A)"
-              (configuration-model configuration)
-              (configuration-reasoning-effort configuration)))
-     (application--banner-metadata-field
-      "conversation"
-      (conversation-identifier conversation))
-     (application--banner-metadata-field
-      "workspace"
-      (namestring (configuration-working-directory configuration))))))
+(-> application--banner-metadata-rows (application (integer 1)) list)
+(defun application--banner-metadata-rows (application maximum-width)
+  "Return identity and runtime rows no wider than MAXIMUM-WIDTH."
+  (let* ((configuration (application-configuration application))
+         (title
+           (list (terminal-span :strong "AUTOLITH")
+                 (terminal-span :dim (format nil " v~A" +autolith-version+))))
+         (model
+           (application--banner-metadata-field
+            "model"
+            (format nil "~A (effort ~A)"
+                    (configuration-model configuration)
+                    (configuration-reasoning-effort configuration))))
+         (workspace
+           (application--banner-metadata-field
+            "workspace"
+            (namestring (configuration-working-directory configuration))))
+         (detail-rows (list title model workspace))
+         (divider-width
+           (min maximum-width
+                (loop for row in detail-rows
+                      maximize (terminal--spans-width row)))))
+    (list title
+          (list (terminal-span
+                 :dim
+                 (make-string divider-width :initial-element #\─)))
+          model
+          workspace)))
 
 (-> application--banner-terminate-row (list) list)
 (defun application--banner-terminate-row (spans)
@@ -107,16 +116,24 @@
 (defun application-banner (application)
   "Return APPLICATION's styled identity, session metadata, and security notice."
   (let* ((columns (application--banner-columns application))
-         (metadata-rows (application--banner-metadata-rows application))
+         (metadata-width
+           (- columns
+              (application--banner-logo-width)
+              (terminal--text-width +application-banner-gap+)))
          (side-by-side-minimum
            (+ (application--banner-logo-width)
               (terminal--text-width +application-banner-gap+)
               +application-banner-minimum-metadata-width+))
          (header
            (if (>= columns side-by-side-minimum)
-               (application--banner-side-by-side-spans metadata-rows columns)
-               (application--banner-stacked-spans metadata-rows columns))))
+               (application--banner-side-by-side-spans
+                (application--banner-metadata-rows application metadata-width)
+                columns)
+               (application--banner-stacked-spans
+                (application--banner-metadata-rows application columns)
+                columns))))
     (append
+     (list (terminal-span :plain (string #\Newline)))
      header
      (list
       (terminal-span

@@ -98,8 +98,10 @@ once and remain in ordinary terminal scrollback. Only the bounded live region,
 holding the unfinished status row, the padded prompt, and command suggestions,
 is repainted. Model and pasted text are sanitized before they reach the
 terminal. The startup =AL= mark uses a light-green xterm-256 row gradient when
-available and solid bold green otherwise. Other styles use the basic terminal
-palette and emphasis. Set =NO_COLOR= to disable styling entirely.
+available and solid bold green otherwise. Its version heading and divider sit
+beside the mark above the model and workspace; internal conversation identifiers
+stay out of the header. Other styles use the basic terminal palette and
+emphasis. Set =NO_COLOR= to disable styling entirely.
 
 Long agent turns are allowed to continue well beyond eight tool batches. Autolith
 warns the model as provider step 48 approaches, reserves step 64 for a
