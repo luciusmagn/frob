@@ -18,7 +18,7 @@ Autolith is an initial dogfoodable Common Lisp agent for Linux and SBCL. It:
 - starts from a validated preloaded active image when available; and
 - can boot a retained generation against its exact Git revision with fallback.
 
-The implementation follows [[file:autolith-minimal-technical-spec.org][the technical specification]]. The object and
+The implementation follows [[file:docs/autolith-minimal-technical-spec.org][the technical specification]]. The object and
 file boundaries are summarized in [[file:docs/architecture.org][the architecture note]].
 
 * Requirements and setup

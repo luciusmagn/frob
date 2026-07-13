@@ -3,7 +3,7 @@
 ## Purpose and Sources of Truth
 
 Autolith is a small, live, self-modifying Common Lisp agent. Read
-`autolith-minimal-technical-spec.org` before making architectural changes. The
+`docs/autolith-minimal-technical-spec.org` before making architectural changes. The
 specification defines product behavior and runtime boundaries; this file
 defines repository, Common Lisp, testing, and commit policy.
 
