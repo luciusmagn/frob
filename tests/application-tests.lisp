@@ -23,9 +23,13 @@
                                      :configuration configuration
                                      :conversation conversation)))
     (unwind-protect
-         (let ((text (format nil "~{~A~}"
-                             (mapcar #'terminal-span-text
-                                     (application-banner application)))))
+         (let* ((spans (application-banner application))
+                (wordmark (terminal-span-text (first spans)))
+                (text (format nil "~{~A~}"
+                              (mapcar #'terminal-span-text spans))))
+           (test-assert (and (search "█" wordmark)
+                             (= (count #\Newline wordmark) 5))
+                        "the startup banner uses a multiline block wordmark")
            (test-assert (search "AUTOLITH" text)
                         "the startup banner names Autolith")
            (test-assert (search (format nil "v~A" +autolith-version+) text)

@@ -8,9 +8,19 @@
   (let ((configuration (application-configuration application))
         (conversation (application-conversation application)))
     (append
-     (list (terminal-span :brand "AUTOLITH")
-           (terminal-span :dim (format nil "  v~A~%" +autolith-version+))
-           (terminal-span :plain (format nil "~%")))
+     (list (terminal-span
+            :brand
+            (format nil
+                    "~{~A~%~}"
+                    '(" ██  █  █ ████  ██  █    ████ ████ █  █"
+                      "█  █ █  █  ██  █  █ █     ██   ██  █  █"
+                      "████ █  █  ██  █  █ █     ██   ██  ████"
+                      "█  █ █  █  ██  █  █ █     ██   ██  █  █"
+                      "█  █  ██   ██   ██  ████ ████  ██  █  █")))
+           (terminal-span
+            :dim
+            (format nil "AUTOLITH // LIVE COMMON LISP // v~A~%~%"
+                    +autolith-version+)))
      (application--field-spans "model"
                                (format nil "~A (effort ~A)"
                                        (configuration-model configuration)
