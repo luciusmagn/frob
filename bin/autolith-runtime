@@ -121,7 +121,6 @@ source_install()
   [[ -f "$distribution/version.lisp-expr" &&
      -f "$distribution/src/code/list.lisp" ]] ||
     fail "the SBCL source archive has an unexpected layout."
-  chmod -R a-w "$distribution"
 
   if [[ -e "$managed_source" ]]; then
     stale_source=$runtime_root/source.stale.$$
@@ -133,6 +132,7 @@ source_install()
     fi
     fail "the verified SBCL source could not be published."
   fi
+  chmod -R a-w "$managed_source"
   if [[ -n "$stale_source" ]]; then
     chmod -R u+w "$stale_source"
     rm -rf -- "$stale_source"
