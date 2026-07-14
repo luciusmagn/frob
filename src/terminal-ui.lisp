@@ -356,6 +356,10 @@
   (let* ((terminal (terminal-ui-terminal ui))
          (row-width (max 1 (terminal-columns terminal)))
          (rows nil))
+    (dolist (row (terminal-ui-preview-rows ui))
+      (setf rows
+            (append rows
+                    (list (terminal--clip-spans row row-width)))))
     (let ((tail (terminal-ui-stream-tail ui)))
       (when tail
         (setf rows
@@ -636,6 +640,20 @@ when no resize needs to be applied."
               (terminal--write-safe-text (terminal-ui-terminal ui) display)
               (terminal-flush (terminal-ui-terminal ui)))))
       t)))
+
+(-> terminal-ui-set-preview-rows (terminal-ui list) terminal-ui)
+(defun terminal-ui-set-preview-rows (ui rows)
+  "Replace UI's transient styled ROWS and repaint only the live region."
+  (unless (every #'terminal-styled-text-p rows)
+    (error 'terminal-error
+           :message "Every terminal preview row must contain styled spans."
+           :operation ':set-preview
+           :cause nil))
+  (with-terminal-ui-locked (ui)
+    (unless (equal rows (terminal-ui-preview-rows ui))
+      (setf (terminal-ui-preview-rows ui) rows)
+      (terminal-ui--paint-live ui)))
+  ui)
 
 (-> terminal-ui-set-status (terminal-ui (option string)) terminal-ui)
 (defun terminal-ui-set-status (ui status)

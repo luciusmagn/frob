@@ -317,6 +317,8 @@
    (application-configuration application)
    enabled-p)
   (setf (application-reasoning-traces-p application) enabled-p)
+  (unless enabled-p
+    (terminal-ui-set-preview-rows (application-ui application) nil))
   nil)
 
 (-> application-trace-command (application (option string)) null)

@@ -154,6 +154,11 @@
     :accessor terminal-ui-status
     :type (option string)
     :documentation "The optional unfinished activity shown above the prompt.")
+   (preview-rows
+    :initform nil
+    :accessor terminal-ui-preview-rows
+    :type list
+    :documentation "Transient styled rows shown in the live region, never scrollback.")
    (queued-input-count
     :initform 0
     :accessor terminal-ui-queued-input-count

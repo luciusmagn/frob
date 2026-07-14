@@ -135,8 +135,9 @@ first private commit.
 Owns a restrained primary-screen interface. Finalized transcript output is
 written once and left in normal terminal scrollback. Autolith never enters the
 alternate screen and never clears scrollback. Only the bounded live region,
-holding unfinished status, the full-width multiline prompt, and any command
-completion suggestions, may be repainted. Clinedi owns Unicode-aware editor
+holding transient reasoning previews, unfinished status, the full-width multiline
+prompt, and any command completion suggestions, may be repainted. Reasoning
+previews enter scrollback only when finalized. Clinedi owns Unicode-aware editor
 state, input decoding, screen geometry, candidate navigation and arrangement,
 and the scrollback-safe live-region mechanics. Autolith owns candidate data,
 command filtering, semantic styling, terminal mode, and application event

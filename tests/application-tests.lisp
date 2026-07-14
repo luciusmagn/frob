@@ -282,10 +282,15 @@
                     (preferences-reasoning-traces-p configuration))))
              (test-assert (application-reasoning-traces-p reloaded)
                           "a fresh application can restore trace mode"))
+           (terminal-ui-set-preview-rows
+            ui
+            (application--reasoning-preview-rows application "visible preview"))
            (recording-terminal-reset terminal)
            (application-trace-command application "off")
            (test-assert (not (application-reasoning-traces-p application))
                         "/trace off disables reasoning-summary presentation")
+           (test-assert (null (terminal-ui-preview-rows ui))
+                        "/trace off removes an unfinished reasoning preview")
            (test-assert (not (preferences-reasoning-traces-p configuration))
                         "/trace off persists its disabled state")
            (test-assert (search "hidden and saved"
@@ -706,17 +711,55 @@
                 (send-reasoning
                   (callback-agent-observer-reasoning-callback observer))
                 (send-status (callback-agent-observer-status-callback observer))
-                (streamed-reasoning "Checking the safe path.")
+                (reasoning-prefix "**<thought>** Checking the safe path.")
+                (reasoning-suffix
+                  " Comparing fallback behavior and verifying the live preview remains separate from status.")
+                (streamed-reasoning
+                  (concatenate 'string reasoning-prefix reasoning-suffix))
                 (streamed-text (format nil
                                        "The quick brown fox jumps over~%the lazy dog")))
            (terminal-ui-start (application-ui application))
            (funcall send-status :provider-request-started nil)
-           (funcall send-reasoning streamed-reasoning)
-           (test-assert (search "Checking"
-                                (recording-terminal-output terminal))
-                        "trace mode shows live reasoning-summary progress")
+           (funcall send-reasoning reasoning-prefix)
+           (let* ((ui (application-ui application))
+                  (preview (terminal-ui-preview-rows ui))
+                  (preview-text
+                    (format nil "~{~A~^~%~}"
+                            (mapcar #'markdown-tests--row-text preview))))
+             (test-assert
+              (and (search "◇ reasoning summary" preview-text)
+                   (search "  │ " preview-text)
+                   (find (terminal-span :strong "<thought>")
+                         (apply #'append preview)
+                         :test #'equal)
+                   (not (search "**" preview-text)))
+              "reasoning deltas render as a styled live trace block")
+             (test-assert
+              (and (member (terminal-ui-status ui)
+                           *application-thinking-words*
+                           :test #'string=)
+                   (not (search "thought" (terminal-ui-status ui)
+                                :test #'char-equal)))
+              "the activity status stays separate from reasoning text"))
+           (funcall send-reasoning reasoning-suffix)
+           (let ((preview (terminal-ui-preview-rows (application-ui application))))
+             (test-assert
+              (and (<= (length preview)
+                       +application-reasoning-preview-row-limit+)
+                   (find (terminal-span :dim "  │ …")
+                         (apply #'append preview)
+                         :test #'equal))
+              "long live reasoning traces retain a bounded recent preview"))
+           (recording-terminal-reset terminal)
            (funcall send-text (format nil
                                       "The quick brown fox jumps over~%"))
+           (test-assert (null (terminal-ui-preview-rows
+                              (application-ui application)))
+                        "assistant output replaces the live reasoning preview")
+           (funcall send-reasoning " late event")
+           (test-assert (null (terminal-ui-preview-rows
+                              (application-ui application)))
+                        "late reasoning deltas cannot resurrect a finalized preview")
            (funcall send-text "the lazy dog")
            (let* ((streamed (recording-terminal-output terminal))
                   (reasoning-position (search "◇ reasoning summary" streamed))
@@ -763,8 +806,40 @@
             (not (search "◇ reasoning summary"
                          (recording-terminal-output terminal)))
             "replaying a conversation does not duplicate streamed reasoning")
+           (let ((tool-reasoning "**<thought>** Inspect the value with a tool."))
+             (funcall send-status :provider-request-started nil)
+             (funcall send-reasoning tool-reasoning)
+             (conversation-append-provider-item
+              conversation
+              (json-object
+               "type" "reasoning"
+               "summary" (json-array
+                          (json-object "type" "summary_text"
+                                       "text" tool-reasoning))
+               "encrypted_content" "opaque-tool-reasoning"))
+             (conversation-append-provider-item
+              conversation
+              (json-object
+               "type" "function_call"
+               "call_id" "call-live"
+               "namespace" "self"
+               "name" "eval"
+               "arguments" (json-encode (json-object "form" "(+ 1 2)"))))
+             (recording-terminal-reset terminal)
+             (funcall send-status :provider-request-completed nil)
+             (let ((output (recording-terminal-output terminal)))
+               (test-assert
+                (and (= (terminal-tests--substring-count
+                         "◇ reasoning summary"
+                         output)
+                        1)
+                     (search "<thought>" output)
+                     (search "▸ self.eval" output)
+                     (null (terminal-ui-preview-rows
+                            (application-ui application))))
+                "tool-only provider steps finalize one trace before the tool call")))
            (conversation-append-tool-result
-            conversation "call-1" "self.eval" "42" t)
+            conversation "call-live" "self.eval" "42" t)
            (recording-terminal-reset terminal)
            (funcall send-status :tool-call-completed (list :tool "self.eval"))
            (test-assert (search "✓ self.eval"

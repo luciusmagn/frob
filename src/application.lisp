@@ -422,9 +422,12 @@
       (t
        ""))))
 
-(-> application--reasoning-summary-entry (application string) list)
-(defun application--reasoning-summary-entry (application summary)
-  "Return one railed transcript entry for provider-visible reasoning SUMMARY."
+(define-constant +application-reasoning-preview-row-limit+ 5
+  :documentation "The maximum rows shown for one unfinished reasoning summary.")
+
+(-> application--reasoning-summary-rows (application string) list)
+(defun application--reasoning-summary-rows (application summary)
+  "Return styled rows for one provider-visible reasoning SUMMARY."
   (let* ((safe-summary
            (string-right-trim '(#\Space #\Tab #\Newline #\Return)
                               (sanitize-text summary)))
@@ -433,12 +436,29 @@
                 (- (terminal-columns
                     (terminal-ui-terminal (application-ui application)))
                    5))))
-    (append
+    (cons
      (list (terminal-span ':hint "◇ reasoning summary"))
      (loop for row in (markdown-render-inline safe-summary body-width)
-           append (append (list (terminal-span ':plain (string #\Newline))
-                                (terminal-span ':dim "  │ "))
-                          row)))))
+           collect (append (list (terminal-span ':dim "  │ ")) row)))))
+
+(-> application--reasoning-preview-rows (application string) list)
+(defun application--reasoning-preview-rows (application summary)
+  "Return a tail-biased bounded live preview of reasoning SUMMARY."
+  (let ((rows (application--reasoning-summary-rows application summary)))
+    (if (<= (length rows) +application-reasoning-preview-row-limit+)
+        rows
+        (append (list (first rows)
+                      (list (terminal-span ':dim "  │ …")))
+                (last rows (- +application-reasoning-preview-row-limit+ 2))))))
+
+(-> application--reasoning-summary-entry (application string) list)
+(defun application--reasoning-summary-entry (application summary)
+  "Return one railed transcript entry for provider-visible reasoning SUMMARY."
+  (loop for row in (application--reasoning-summary-rows application summary)
+        for first-row-p = t then nil
+        append (if first-row-p
+                   row
+                   (cons (terminal-span ':plain (string #\Newline)) row))))
 
 (-> response-item-entry (application json-object) (option list))
 (defun response-item-entry (application item)
@@ -686,22 +706,11 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
            *application-thinking-words*)
       "pondering"))
 
-(-> application-stream-status (application string string) null)
-(defun application-stream-status (application label text)
-  "Show LABEL and the bounded single-line tail of streaming TEXT."
-  (let* ((safe (sanitize-text text :single-line-p t))
-         (start (max 0 (- (length safe) 240))))
-    (terminal-ui-set-status
-     (application-ui application)
-     (format nil "~A: ~A" label (subseq safe start))))
-  nil)
-
 (-> application-agent-observer (application) agent-observer)
 (defun application-agent-observer (application)
   "Return a terminal observer streaming one APPLICATION turn as stable lines."
   (let ((ui (application-ui application))
         (activity-label (application-thinking-label))
-        (reasoning-tail "")
         (reasoning-text "")
         (presented-reasoning-text nil)
         (stream-text "")
@@ -710,6 +719,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
         (stream-renderer nil))
     (labels ((reasoning-flush ()
                "Finalize the visible reasoning summary before assistant output."
+               (terminal-ui-set-preview-rows ui nil)
                (when (and (application-reasoning-traces-p application)
                           (plusp (length reasoning-text))
                           (null presented-reasoning-text))
@@ -730,7 +740,6 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
                    (unless stream-open-p
                      (reasoning-flush)
                      (setf stream-open-p t
-                           reasoning-tail ""
                            stream-renderer (application--markdown-renderer
                                             application))
                      (terminal-ui-set-status ui nil)
@@ -769,22 +778,25 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
        :text-callback #'stream-text-delta
        :reasoning-callback
        (lambda (delta)
-         (when (application-reasoning-traces-p application)
+         (when (and (application-reasoning-traces-p application)
+                    (null presented-reasoning-text)
+                    (plusp (length delta)))
            (setf reasoning-text (concatenate 'string reasoning-text delta))
-           (let ((start (max 0 (- (length reasoning-text) 500))))
-             (setf reasoning-tail (subseq reasoning-text start)))
-           (application-stream-status application activity-label reasoning-tail)))
+           (terminal-ui-set-preview-rows
+            ui
+            (application--reasoning-preview-rows application reasoning-text))))
        :status-callback
        (lambda (status details)
          (case status
            (:provider-request-started
-            (setf reasoning-tail ""
-                  reasoning-text ""
+            (terminal-ui-set-preview-rows ui nil)
+            (setf reasoning-text ""
                   presented-reasoning-text nil
                   stream-text ""
                   activity-label (application-thinking-label))
             (terminal-ui-set-status ui activity-label))
            (:provider-request-completed
+            (reasoning-flush)
             (let ((completed-stream-text (and stream-open-p stream-text))
                   (completed-reasoning-text presented-reasoning-text))
               (stream-flush)
@@ -805,6 +817,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
             (application-render-records application)
             (terminal-ui-set-status ui activity-label))
            (:turn-completed
+            (terminal-ui-set-preview-rows ui nil)
             (terminal-ui-set-status ui nil))))))))
 
 (-> application--turn-final-text (provider-result) (option string))
@@ -868,6 +881,7 @@ remain finalized so later conversation replay cannot duplicate streamed rows."
              content
              :observer (application-agent-observer application)
              :goal-context (application-goal-context application))))
+      (terminal-ui-set-preview-rows ui nil)
       (terminal-ui-set-status ui nil)
       (terminal-ui-stream-update ui :tail nil)
       (application-render-records application)))

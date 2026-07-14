@@ -104,8 +104,8 @@ autolith
 
 The interface stays on the primary screen. Completed transcript rows are emitted
 once and remain in ordinary terminal scrollback. Only the bounded live region,
-holding unfinished status, the full-width prompt, and command suggestions, is
-repainted. Clinedi provides Unicode-aware editing and a cursor-following
+holding unfinished trace previews, status, the full-width prompt, and command
+suggestions, is repainted. Clinedi provides Unicode-aware editing and a cursor-following
 multiline viewport. Input wraps at the actual TTY width, explicit input lines
 are preserved, and the live region never owns the terminal's complete height.
 Each edit replaces that region in one hidden-cursor terminal write. Model and
@@ -185,9 +185,10 @@ goal. Goals persist with their conversation across =/resume=.
 =/model= switches between the 5.6 family models (sol, luna, terra) for the
 current session; =AUTOLITH_MODEL= still selects any model at startup.
 
-=/trace on= shows the provider's dedicated reasoning summaries in the live
-status and transcript for future responses. =/trace off= hides them. The choice
-is saved globally in =${XDG_STATE_HOME:-~/.local/state}/autolith/preferences.sexp=
+=/trace on= shows each provider reasoning summary as a bounded, Markdown-styled
+live trace above the status and prompt, then finalizes it once in the transcript.
+=/trace off= hides them. The choice is saved globally in
+=${XDG_STATE_HOME:-~/.local/state}/autolith/preferences.sexp=
 and survives clean restarts. Autolith never displays raw reasoning text or
 encrypted reasoning payloads; these are model-provided summaries, not hidden
 chain-of-thought.
