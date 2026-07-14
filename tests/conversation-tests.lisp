@@ -82,6 +82,59 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-conversation-model-selection () null)
+(defun test-conversation-model-selection ()
+  "Test model selection headers, append-only changes, and legacy loading."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let ((conversation (conversation-create configuration
+                                                  :identifier "model-choice")))
+           (test-assert
+            (string= (conversation-model conversation) "gpt-5.6-sol")
+            "new conversations inherit the configured model")
+           (test-assert
+            (string= (conversation-reasoning-effort conversation) "ultra")
+            "new conversations inherit the configured effort")
+           (conversation-set-model-selection conversation "gpt-5.6-luna" "high")
+           (test-assert (not (probe-file (conversation-pathname conversation)))
+                        "selecting a model does not persist an empty conversation")
+           (conversation-append-user-message conversation "remember this model")
+           (let ((header (first (conversation--read-records
+                                 (conversation-pathname conversation)))))
+             (test-assert (string= (getf (rest header) :model) "gpt-5.6-luna")
+                          "the initial model is stored in the header")
+             (test-assert
+              (string= (getf (rest header) :reasoning-effort) "high")
+              "the initial effort is stored in the header"))
+           (conversation-set-model-selection conversation "gpt-5.6-terra" "low")
+           (let* ((records (conversation--read-records
+                            (conversation-pathname conversation)))
+                  (selection (first (last records))))
+             (test-assert (eq (first selection) :configuration)
+                          "later model changes append configuration records")
+             (test-assert (string= (getf (rest selection) :model)
+                                   "gpt-5.6-terra")
+                          "the appended record carries the changed model"))
+           (let ((reloaded (conversation-load-by-id configuration "model-choice")))
+             (test-assert
+              (string= (conversation-model reloaded) "gpt-5.6-terra")
+              "conversation replay restores the latest model")
+             (test-assert
+              (string= (conversation-reasoning-effort reloaded) "low")
+              "conversation replay restores the latest effort"))
+           (let ((legacy (conversation-pathname-for-id configuration "legacy-model")))
+             (conversation--write-form
+              legacy
+              (list :conversation :version 1 :id "legacy-model" :created-at 1))
+             (let ((loaded (conversation-load-by-id configuration "legacy-model")))
+               (test-assert (null (conversation-model loaded))
+                            "legacy conversations load without a model")
+               (test-assert (null (conversation-reasoning-effort loaded))
+                            "legacy conversations load without an effort"))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-conversation-persistence () null)
 (defun test-conversation-persistence ()
   "Test append-only conversation projection and incomplete-tail recovery."

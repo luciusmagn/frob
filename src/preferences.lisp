@@ -138,7 +138,7 @@
          (selected configuration))
     (when (and saved-model
                (not (non-empty-string-p (uiop:getenv "AUTOLITH_MODEL"))))
-      (setf selected (configuration-with-model selected saved-model)))
+      (setf selected (configuration--clone selected :model saved-model)))
     (when (and saved-effort
                (not (non-empty-string-p
                      (uiop:getenv "AUTOLITH_REASONING_EFFORT"))))

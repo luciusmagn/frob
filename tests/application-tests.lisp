@@ -1222,6 +1222,9 @@
                                   (application-configuration application))
                                  "low")
                         "switching effort replaces the configuration")
+           (test-assert
+            (string= (conversation-reasoning-effort conversation) "low")
+            "switching effort updates the active conversation")
            (let ((preferences (preferences-load configuration)))
              (test-assert
               (string= (preference-state-reasoning-effort preferences) "low")
@@ -1274,6 +1277,9 @@
                                   (application-configuration application))
                                  "low")
                         "model switching preserves the reasoning effort")
+           (test-assert (string= (conversation-model conversation)
+                                "gpt-5.6-terra")
+                        "model switching updates the active conversation")
            (let ((preferences (preferences-load configuration)))
              (test-assert
               (string= (preference-state-model preferences) "gpt-5.6-terra")
@@ -1287,7 +1293,41 @@
                               nil)
                           (configuration-error ()
                             t))
-                        "unsupported models are rejected with the choices"))
+                        "unsupported models are rejected with the choices")
+           (conversation-append-user-message conversation "persist this choice")
+           (let* ((resumed-configuration
+                    (configuration-with-reasoning-effort
+                     (configuration-with-model configuration "gpt-5.6-luna")
+                     "xhigh"))
+                  (resumed (conversation-create resumed-configuration
+                                                :identifier "resumed-model")))
+             (conversation-append-user-message resumed "use the saved choice")
+             (application-install-conversation
+              application
+              (conversation-load-by-id configuration "resumed-model"))
+             (test-assert
+              (string= (configuration-model
+                        (application-configuration application))
+                       "gpt-5.6-luna")
+              "resuming restores the conversation model")
+             (test-assert
+              (string= (configuration-reasoning-effort
+                        (application-configuration application))
+                       "xhigh")
+              "resuming restores the conversation effort")
+             (test-assert
+              (string= (configuration-model
+                        (provider-configuration
+                         (application-provider application)))
+                       "gpt-5.6-luna")
+              "the reconnected provider uses the conversation model"))
+           (let ((preferences (preferences-load configuration)))
+             (test-assert
+              (string= (preference-state-model preferences) "gpt-5.6-terra")
+              "resuming does not replace the global model default")
+             (test-assert
+              (string= (preference-state-reasoning-effort preferences) "low")
+              "resuming does not replace the global effort default")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 

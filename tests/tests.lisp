@@ -46,6 +46,7 @@
     (test-system-prompt-context)
     (test-conversation-persistence)
     (test-conversation-origin-directory)
+    (test-conversation-model-selection)
     (test-conversation-compaction)
     (test-authentication-store)
     (test-authentication-bootstrap-and-refresh)

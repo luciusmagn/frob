@@ -60,7 +60,9 @@ Owns append-only portable records and their projection into provider input.
 Fresh conversations remain in memory until the first durable record atomically
 publishes the header and that record together. Empty sessions therefore create
 no conversation file. It persists each user message before network work begins
-and treats completed provider output items as authoritative history.
+and treats completed provider output items as authoritative history. The header
+records the initial model and reasoning effort; later selection changes append
+configuration records so resuming restores the latest choices.
 
 ** =memories.lisp= and =memory-tools.lisp=
 

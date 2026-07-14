@@ -269,37 +269,25 @@
                                          "current"
                                          "")))))
 
-(-> application--install-configuration (application configuration) null)
-(defun application--install-configuration (application configuration)
-  "Switch APPLICATION to CONFIGURATION, reconnecting its provider and agent."
-  (let* ((previous-provider (application-provider application))
-         (previous-agent (application-agent application))
-         (provider
-           (if previous-provider
-               (provider-with-configuration previous-provider configuration)
-               (provider-create configuration)))
-         (agent (agent-create :configuration configuration
-                              :provider provider
-                              :conversation (application-conversation
-                                             application)
-                              :tool-registry (application-tool-registry
-                                              application)
-                              :worker (application-worker application)
-                              :maximum-provider-steps
-                              (if previous-agent
-                                  (agent-maximum-provider-steps previous-agent)
-                                  +default-maximum-provider-steps+)
-                              :provider-step-warning
-                              (if previous-agent
-                                  (agent-provider-step-warning previous-agent)
-                                  +default-provider-step-warning+)
-                              :maximum-tool-calls
-                              (if previous-agent
-                                  (agent-maximum-tool-calls previous-agent)
-                                  +default-maximum-tool-calls+))))
-    (setf (application-configuration application) configuration
-          (application-provider application) provider
-          (application-agent application) agent))
+(-> application--persist-model-selection (application configuration) null)
+(defun application--persist-model-selection (application configuration)
+  "Persist CONFIGURATION for the active conversation and future processes."
+  (let* ((conversation (application-conversation application))
+         (previous-configuration (application-configuration application))
+         (previous-model (configuration-model previous-configuration))
+         (previous-effort
+           (configuration-reasoning-effort previous-configuration)))
+    (conversation-set-model-selection
+     conversation
+     (configuration-model configuration)
+     (configuration-reasoning-effort configuration))
+    (handler-case
+        (preferences-set-model-selection configuration)
+      (preferences-error (condition)
+        (conversation-set-model-selection conversation
+                                          previous-model
+                                          previous-effort)
+        (error condition))))
   nil)
 
 (-> application-set-reasoning-effort (application string) null)
@@ -309,7 +297,7 @@
           (configuration-with-reasoning-effort
            (application-configuration application)
            effort)))
-    (preferences-set-model-selection configuration)
+    (application--persist-model-selection application configuration)
     (application--install-configuration application configuration)))
 
 (-> application-set-reasoning-traces (application boolean) null)
@@ -369,7 +357,7 @@
   (let ((configuration
           (configuration-with-model (application-configuration application)
                                     model)))
-    (preferences-set-model-selection configuration)
+    (application--persist-model-selection application configuration)
     (application--install-configuration application configuration)))
 
 ;;;; -- Manual Compaction --

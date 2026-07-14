@@ -165,19 +165,36 @@
      :placeholder +application-placeholder+
      :completions +application-commands+)))
 
+(-> application--configuration-for-conversation
+    (configuration conversation)
+    configuration)
+(defun application--configuration-for-conversation (configuration conversation)
+  "Restore CONVERSATION's model selection over CONFIGURATION when present."
+  (configuration--clone
+   configuration
+   :model (conversation-model conversation)
+   :reasoning-effort (conversation-reasoning-effort conversation)))
+
 (-> application-create
     (configuration &key (:conversation-id (option string)))
     application)
 (defun application-create (configuration &key conversation-id)
   "Create a connected application, loading CONVERSATION-ID when supplied."
-  (let ((configuration (preferences-apply-model-selection configuration)))
-    (configuration-ensure-directories configuration)
-    (durable-mutations-load configuration)
-    (let* ((overlay-failures (image-state-load configuration))
-           (reasoning-traces-p (preferences-reasoning-traces-p configuration))
+  (let ((preferred-configuration
+          (preferences-apply-model-selection configuration)))
+    (configuration-ensure-directories preferred-configuration)
+    (durable-mutations-load preferred-configuration)
+    (let* ((overlay-failures (image-state-load preferred-configuration))
+           (reasoning-traces-p
+             (preferences-reasoning-traces-p preferred-configuration))
            (conversation (if conversation-id
-                             (conversation-load-by-id configuration conversation-id)
-                             (conversation-create configuration)))
+                             (conversation-load-by-id preferred-configuration
+                                                      conversation-id)
+                             (conversation-create preferred-configuration)))
+           (configuration
+             (application--configuration-for-conversation
+              preferred-configuration
+              conversation))
            (provider (provider-create
                       configuration
                       :reasoning-summaries-p reasoning-traces-p))
@@ -210,12 +227,13 @@
   (image-state-reconnect)
   (let* ((previous (application-configuration application))
          (retained-conversation (application-conversation application))
-         (configuration
+         (retained-configuration
            (configuration-create
             :working-directory (uiop:getcwd)
             :model (configuration-model previous)
             :reasoning-effort (configuration-reasoning-effort previous)))
-         (reasoning-traces-p (preferences-reasoning-traces-p configuration))
+         (reasoning-traces-p
+           (preferences-reasoning-traces-p retained-configuration))
          (recovery-conversation-id
            (let ((value (uiop:getenv "AUTOLITH_RECOVERY_CONVERSATION_ID")))
              (and (non-empty-string-p value) value)))
@@ -223,15 +241,20 @@
          (conversation
            (cond
              (conversation-id
-              (conversation-load-by-id configuration conversation-id))
+              (conversation-load-by-id retained-configuration conversation-id))
              (recovery-conversation-id
-              (conversation-load-by-id configuration recovery-conversation-id))
+              (conversation-load-by-id retained-configuration
+                                       recovery-conversation-id))
              ((conversation-persisted-p retained-conversation)
               (conversation-load-by-id
-               configuration
+               retained-configuration
                (conversation-identifier retained-conversation)))
              (t
-              (conversation-create configuration))))
+              (conversation-create retained-configuration))))
+         (configuration
+           (application--configuration-for-conversation
+            retained-configuration
+            conversation))
          (provider (provider-create
                     configuration
                     :reasoning-summaries-p reasoning-traces-p))
@@ -275,21 +298,56 @@
         (application-ui application) nil)
   application)
 
+(-> application--install-configuration
+    (application configuration &key (:conversation (option conversation)))
+    null)
+(defun application--install-configuration (application configuration
+                                            &key conversation)
+  "Switch APPLICATION to CONFIGURATION and optionally CONVERSATION."
+  (let* ((active-conversation (or conversation
+                                  (application-conversation application)))
+         (previous-provider (application-provider application))
+         (previous-agent (application-agent application))
+         (provider
+           (if previous-provider
+               (provider-with-configuration previous-provider configuration)
+               (provider-create configuration)))
+         (agent (agent-create :configuration configuration
+                              :provider provider
+                              :conversation active-conversation
+                              :tool-registry (application-tool-registry
+                                              application)
+                              :worker (application-worker application)
+                              :maximum-provider-steps
+                              (if previous-agent
+                                  (agent-maximum-provider-steps previous-agent)
+                                  +default-maximum-provider-steps+)
+                              :provider-step-warning
+                              (if previous-agent
+                                  (agent-provider-step-warning previous-agent)
+                                  +default-provider-step-warning+)
+                              :maximum-tool-calls
+                              (if previous-agent
+                                  (agent-maximum-tool-calls previous-agent)
+                                  +default-maximum-tool-calls+))))
+    (setf (application-configuration application) configuration
+          (application-conversation application) active-conversation
+          (application-provider application) provider
+          (application-agent application) agent))
+  nil)
+
 (-> application-install-conversation (application conversation) application)
 (defun application-install-conversation (application conversation)
-  "Make CONVERSATION active in APPLICATION and reconnect its agent coordinator."
-  (let ((agent
-          (agent-create
-           :configuration (application-configuration application)
-           :provider (application-provider application)
-           :conversation conversation
-           :tool-registry (application-tool-registry application)
-           :worker (application-worker application))))
-    (setf (application-conversation application) conversation
-          (application-agent application) agent
-          (application-rendered-sequence application) 0)
-    (application--load-goal application)
-    application))
+  "Make CONVERSATION active and restore its model selection."
+  (application--install-configuration
+   application
+   (application--configuration-for-conversation
+    (application-configuration application)
+    conversation)
+   :conversation conversation)
+  (setf (application-rendered-sequence application) 0)
+  (application--load-goal application)
+  application)
 
 
 ;;;; -- Transcript Projection --

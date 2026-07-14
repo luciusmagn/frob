@@ -186,7 +186,8 @@ goal. Goals persist with their conversation across =/resume=.
 =/model= switches between the 5.6 family models (sol, luna, terra), and
 =/effort= selects their reasoning effort. Both choices become the global
 defaults for later launches. =AUTOLITH_MODEL= and =AUTOLITH_REASONING_EFFORT=
-override the saved defaults when set at startup.
+override the saved defaults when set at startup. Each conversation also records
+its latest model and effort, so =/resume= restores the choices used there.
 
 =/trace on= shows each provider reasoning summary as a bounded, Markdown-styled
 live trace above the status and prompt, then finalizes it once in the transcript.

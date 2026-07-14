@@ -29,6 +29,18 @@
     :reader conversation-origin-directory
     :type (option string)
     :documentation "The workspace directory in which this conversation began.")
+   (model
+    :initarg :model
+    :initform nil
+    :accessor conversation-model
+    :type (option non-empty-string)
+    :documentation "The provider model most recently selected for this conversation.")
+   (reasoning-effort
+    :initarg :reasoning-effort
+    :initform nil
+    :accessor conversation-reasoning-effort
+    :type (option non-empty-string)
+    :documentation "The reasoning effort most recently selected for this conversation.")
    (next-sequence
     :initarg :next-sequence
     :accessor conversation-next-sequence
@@ -58,7 +70,9 @@
         :version 1
         :id (conversation-identifier conversation)
         :created-at (conversation-created-at conversation)
-        :directory (conversation-origin-directory conversation)))
+        :directory (conversation-origin-directory conversation)
+        :model (conversation-model conversation)
+        :reasoning-effort (conversation-reasoning-effort conversation)))
 
 (-> conversation--write-forms (pathname list &key (:append boolean)) null)
 (defun conversation--write-forms (pathname forms &key append)
@@ -132,6 +146,9 @@
                    :persisted-p nil
                    :created-at created-at
                    :origin-directory origin-directory
+                   :model (configuration-model configuration)
+                   :reasoning-effort
+                   (configuration-reasoning-effort configuration)
                    :next-sequence 1
                    :input-items nil)))
 
@@ -257,6 +274,38 @@
    conversation
    (list :provider :metadata metadata)))
 
+(-> conversation--model-selection-p (t t) boolean)
+(defun conversation--model-selection-p (model reasoning-effort)
+  "Return true when MODEL and REASONING-EFFORT form a restorable selection."
+  (and (non-empty-string-p model)
+       (non-empty-string-p reasoning-effort)
+       (not
+        (null
+         (member reasoning-effort
+                 +supported-reasoning-efforts+
+                 :test #'string=)))))
+
+(-> conversation-set-model-selection (conversation string string) null)
+(defun conversation-set-model-selection (conversation model reasoning-effort)
+  "Remember MODEL and REASONING-EFFORT without persisting an empty conversation."
+  (unless (conversation--model-selection-p model reasoning-effort)
+    (error 'conversation-invariant-error
+           :message "A conversation model selection is invalid."
+           :pathname (conversation-pathname conversation)
+           :sequence (conversation-next-sequence conversation)))
+  (unless (and (string= model (or (conversation-model conversation) ""))
+               (string= reasoning-effort
+                        (or (conversation-reasoning-effort conversation) "")))
+    (when (conversation-persisted-p conversation)
+      (conversation-append-record
+       conversation
+       (list :configuration
+             :model model
+             :reasoning-effort reasoning-effort)))
+    (setf (conversation-model conversation) model
+          (conversation-reasoning-effort conversation) reasoning-effort))
+  nil)
+
 (define-constant +conversation-summary-prefix+
   "A previous segment of this conversation was compacted. The summary below replaces that segment; use it to continue seamlessly without repeating completed work."
   :test #'string=
@@ -353,7 +402,17 @@ it described the uncompacted context."
       (let ((total (conversation--usage-total
                     (getf (getf (rest record) :metadata) :usage))))
         (when total
-          (setf (conversation-last-total-tokens conversation) total)))))
+          (setf (conversation-last-total-tokens conversation) total))))
+    (when (eq (first record) :configuration)
+      (let ((model (getf (rest record) :model))
+            (reasoning-effort (getf (rest record) :reasoning-effort)))
+        (unless (conversation--model-selection-p model reasoning-effort)
+          (error 'conversation-invariant-error
+                 :message "A persisted conversation model selection is invalid."
+                 :pathname (conversation-pathname conversation)
+                 :sequence sequence))
+        (setf (conversation-model conversation) model
+              (conversation-reasoning-effort conversation) reasoning-effort))))
   nil)
 
 (-> conversation-peek-header (pathname) (option list))
@@ -388,6 +447,8 @@ conversation files."
              :pathname pathname
              :sequence nil))
     (let* ((directory (getf (rest header) :directory))
+           (model (getf (rest header) :model))
+           (reasoning-effort (getf (rest header) :reasoning-effort))
            (conversation
              (make-instance 'conversation
                             :identifier (getf (rest header) :id)
@@ -396,8 +457,18 @@ conversation files."
                             :created-at (getf (rest header) :created-at)
                             :origin-directory (and (stringp directory)
                                                    directory)
+                            :model (and (non-empty-string-p model) model)
+                            :reasoning-effort
+                            (and (non-empty-string-p reasoning-effort)
+                                 reasoning-effort)
                             :next-sequence 1
                             :input-items nil)))
+      (unless (or (and (null model) (null reasoning-effort))
+                  (conversation--model-selection-p model reasoning-effort))
+        (error 'conversation-invariant-error
+               :message "The conversation header has an invalid model selection."
+               :pathname pathname
+               :sequence nil))
       (dolist (record (rest records))
         (conversation--apply-record conversation record))
       conversation)))
