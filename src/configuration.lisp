@@ -318,6 +318,11 @@ Selecting a different model recomputes the context window for that model."
   (merge-pathnames "current-image-commit.sexp"
                    (configuration-state-root configuration)))
 
+(-> configuration-preferences-path (configuration) pathname)
+(defun configuration-preferences-path (configuration)
+  "Return the atomic global preferences pathname."
+  (merge-pathnames "preferences.sexp" (configuration-state-root configuration)))
+
 (-> configuration-auth-path (configuration) pathname)
 (defun configuration-auth-path (configuration)
   "Return Autolith's private OAuth credential pathname."

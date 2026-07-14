@@ -257,25 +257,40 @@
 
 (-> test-reasoning-trace-command () null)
 (defun test-reasoning-trace-command ()
-  "Test explicit control of provider-visible reasoning summaries."
-  (let* ((application (application-tests--ui-application :columns 60))
+  "Test persistent control of provider-visible reasoning summaries."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (application (application-tests--ui-application :columns 60))
          (ui (application-ui application))
          (terminal (terminal-ui-terminal ui)))
+    (setf (application-configuration application) configuration)
     (terminal-ui-start ui)
     (unwind-protect
          (progn
            (application-trace-command application "on")
            (test-assert (application-reasoning-traces-p application)
                         "/trace on enables reasoning-summary presentation")
-           (test-assert (search "future responses"
+           (test-assert (preferences-reasoning-traces-p configuration)
+                        "/trace on persists its enabled state")
+           (test-assert (search "enabled and saved"
                                 (recording-terminal-output terminal))
-                        "/trace on confirms its future-response scope")
+                        "/trace on confirms persistence")
+           (let ((reloaded
+                   (make-instance
+                    'application
+                    :reasoning-traces-p
+                    (preferences-reasoning-traces-p configuration))))
+             (test-assert (application-reasoning-traces-p reloaded)
+                          "a fresh application can restore trace mode"))
            (recording-terminal-reset terminal)
            (application-trace-command application "off")
            (test-assert (not (application-reasoning-traces-p application))
                         "/trace off disables reasoning-summary presentation")
-           (test-assert (search "hidden" (recording-terminal-output terminal))
-                        "/trace off confirms summaries are hidden")
+           (test-assert (not (preferences-reasoning-traces-p configuration))
+                        "/trace off persists its disabled state")
+           (test-assert (search "hidden and saved"
+                                (recording-terminal-output terminal))
+                        "/trace off confirms persistence")
            (test-assert
             (handler-case
                 (progn
@@ -284,7 +299,8 @@
               (configuration-error ()
                 t))
             "unsupported trace modes signal a typed usage error"))
-      (terminal-ui-stop ui)))
+      (terminal-ui-stop ui)
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
 (-> test-interrupt-resume-instruction () null)

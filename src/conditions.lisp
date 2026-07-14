@@ -107,6 +107,41 @@
 
 ;;;; -- Persistence and Tool Conditions --
 
+(define-condition preferences-error (autolith-error)
+  ((pathname
+    :initarg :pathname
+    :reader preferences-error-pathname
+    :type pathname
+    :documentation "The global preferences file being read or written.")
+   (operation
+    :initarg :operation
+    :reader preferences-error-operation
+    :type keyword
+    :documentation "The preference operation that failed.")
+   (cause
+    :initarg :cause
+    :reader preferences-error-cause
+    :type t
+    :documentation "The underlying failure, when available."))
+  (:documentation "Global preferences could not be read or persisted."))
+
+(define-condition preferences-load-warning (warning)
+  ((pathname
+    :initarg :pathname
+    :reader preferences-load-warning-pathname
+    :type pathname
+    :documentation "The invalid preferences file that was ignored.")
+   (cause
+    :initarg :cause
+    :reader preferences-load-warning-cause
+    :type preferences-error
+    :documentation "The structured preference read failure."))
+  (:documentation "A malformed preference file was ignored during startup.")
+  (:report (lambda (condition stream)
+             (format stream "Ignoring preferences at ~A: ~A"
+                     (preferences-load-warning-pathname condition)
+                     (preferences-load-warning-cause condition)))))
+
 (define-condition conversation-error (autolith-error)
   ((pathname
     :initarg :pathname

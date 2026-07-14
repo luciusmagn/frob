@@ -186,9 +186,11 @@ goal. Goals persist with their conversation across =/resume=.
 current session; =AUTOLITH_MODEL= still selects any model at startup.
 
 =/trace on= shows the provider's dedicated reasoning summaries in the live
-status and transcript for future responses. =/trace off= hides them. Autolith
-never displays raw reasoning text or encrypted reasoning payloads; these are
-model-provided summaries, not hidden chain-of-thought.
+status and transcript for future responses. =/trace off= hides them. The choice
+is saved globally in =${XDG_STATE_HOME:-~/.local/state}/autolith/preferences.sexp=
+and survives clean restarts. Autolith never displays raw reasoning text or
+encrypted reasoning payloads; these are model-provided summaries, not hidden
+chain-of-thought.
 
 Context compaction keeps long conversations going. When the newest provider
 step reports total token usage at or beyond the compaction limit, Autolith asks

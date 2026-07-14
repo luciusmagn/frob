@@ -20,6 +20,7 @@
                              (:file "conditions")
                              (:file "json")
                              (:file "configuration")
+                             (:file "preferences")
                              (:file "authentication")
                              (:file "lisp-images")
                              (:file "device-authentication")
@@ -59,6 +60,7 @@
                 :serial t
                 :components ((:file "test-support")
                              (:file "memory-tests")
+                             (:file "preferences-tests")
                              (:file "prompt-tests")
                              (:file "conversation-tests")
                              (:file "authentication-tests")

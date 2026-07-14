@@ -312,7 +312,10 @@
 
 (-> application-set-reasoning-traces (application boolean) null)
 (defun application-set-reasoning-traces (application enabled-p)
-  "Show future provider-visible reasoning summaries when ENABLED-P is true."
+  "Persist and apply whether future reasoning summaries are visible."
+  (preferences-set-reasoning-traces
+   (application-configuration application)
+   enabled-p)
   (setf (application-reasoning-traces-p application) enabled-p)
   nil)
 
@@ -324,16 +327,18 @@
       ((null mode)
        (application-present
         application
-        (format nil "Reasoning summaries are ~:[hidden~;shown~]. Use /trace on or /trace off."
+        (format nil
+                "Reasoning summaries are ~:[hidden~;shown~]. This setting ~
+                 persists across restarts."
                 (application-reasoning-traces-p application))))
       ((string= mode "on")
        (application-set-reasoning-traces application t)
        (application-present
         application
-        "Visible reasoning summaries will be shown for future responses."))
+        "Visible reasoning summaries are enabled and saved."))
       ((string= mode "off")
        (application-set-reasoning-traces application nil)
-       (application-present application "Reasoning summaries are hidden."))
+       (application-present application "Reasoning summaries are hidden and saved."))
       (t
        (error 'configuration-error
               :message "Usage: /trace on or /trace off."))))

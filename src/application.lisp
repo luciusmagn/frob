@@ -173,6 +173,7 @@
   (configuration-ensure-directories configuration)
   (durable-mutations-load configuration)
   (let* ((overlay-failures (image-state-load configuration))
+         (reasoning-traces-p (preferences-reasoning-traces-p configuration))
          (conversation (if conversation-id
                            (conversation-load-by-id configuration conversation-id)
                            (conversation-create configuration)))
@@ -192,7 +193,8 @@
                                      :tool-registry registry
                                      :worker worker
                                      :agent agent
-                                     :ui ui)))
+                                     :ui ui
+                                     :reasoning-traces-p reasoning-traces-p)))
     (setf (application-overlay-failures application) overlay-failures)
     (application--load-goal application)
     application))
@@ -210,6 +212,7 @@
             :working-directory (uiop:getcwd)
             :model (configuration-model previous)
             :reasoning-effort (configuration-reasoning-effort previous)))
+         (reasoning-traces-p (preferences-reasoning-traces-p configuration))
          (recovery-conversation-id
            (let ((value (uiop:getenv "AUTOLITH_RECOVERY_CONVERSATION_ID")))
              (and (non-empty-string-p value) value)))
@@ -248,6 +251,7 @@
           (application-worker application) worker
           (application-agent application) agent
           (application-ui application) ui
+          (application-reasoning-traces-p application) reasoning-traces-p
           (application-rendered-sequence application)
           (if (and recovery-rendered-sequence
                    (string= (conversation-identifier conversation)

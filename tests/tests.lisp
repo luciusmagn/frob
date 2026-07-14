@@ -42,6 +42,7 @@
                  "JSON arrays have one consistent vector representation")
     (test-memory-persistence)
     (test-memory-tools)
+    (test-preferences)
     (test-system-prompt-context)
     (test-conversation-persistence)
     (test-conversation-origin-directory)

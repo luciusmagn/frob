@@ -33,7 +33,7 @@ user's privileges.
 - A responsive primary-screen terminal interface with ordinary scrollback.
 - Multiline editing and reusable completion widgets provided by Clinedi.
 - Input remains editable while model responses and tools are running.
-- Opt-in provider-visible reasoning summaries with =/trace on=.
+- Persistent, opt-in provider-visible reasoning summaries with =/trace on=.
 - Append-only portable conversation files with exact resume commands.
 - Workspace and global persistent memories with bounded prompt recall.
 - Everyday filesystem and shell tools plus named, isolated Lisp REPLs.
@@ -80,7 +80,7 @@ be drafted and queued while AL is responding. Type =/help= for commands.
 
 * Persistent state
 
-Autolith keeps credentials and atomic selections under
+Autolith keeps credentials, preferences, and atomic selections under
 =${XDG_STATE_HOME:-~/.local/state}/autolith/=, including a private Git history
 of durable mutation snapshots. Conversations, canonical image commits,
 memories, generations, runtimes, matching implementation source, and worker
