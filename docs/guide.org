@@ -235,8 +235,10 @@ Running Autolith with its own repository as the workspace turns it into an
 ordinary development agent for Autolith: =fs.write= and =fs.edit= then work on
 the tracked source like on any project, with only the stable launcher and
 recovery artifacts read-only. From any other workspace those tools refuse
-Autolith's own source entirely. Repository commits stay with the user;
-=self.commit= remains for explicitly user-directed commits.
+Autolith's own source entirely. =self.commit= is reserved for an explicit user
+request to commit paths in Autolith's source while that repository is the
+workspace. It refuses to operate from unrelated workspaces; their Git history
+is handled through ordinary workspace commands when the user requests it.
 
 Autolith keeps all project definitions in one =AUTOLITH= package. Files and CLOS
 protocols express subsystem boundaries without scoped packages.

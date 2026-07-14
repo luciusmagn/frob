@@ -518,12 +518,12 @@
                 empty-schema)
       (register 'self-commit-tool
                 "self" "commit"
-                "Commit explicit checked source paths with one short title."
+                "Commit explicit user-directed paths in Autolith's own checked source repository, only while that repository is the current workspace. This never commits an unrelated workspace repository and is not for live self-modifications."
                 (tool-object-schema
                  (json-object
                   "title" (tool-string-property "A single commit title under 72 characters.")
                   "paths" (tool-string-array-property
-                           "Repository-relative paths to stage and commit."))
+                           "Paths relative to Autolith's source root, not the general workspace repository."))
                  '("title" "paths")))
       (register 'self-checkpoint-tool
                 "self" "checkpoint"

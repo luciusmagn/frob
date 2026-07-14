@@ -200,6 +200,10 @@
              (format nil "autolith-durable-tests-~A/" (make-identifier))
              (uiop:temporary-directory))))
          (configuration (test-configuration-for-source-root source-root))
+         (outside-workspace
+           (uiop:ensure-directory-pathname
+            (merge-pathnames "unrelated-workspace/"
+                             (uiop:temporary-directory))))
          (source-pathname (merge-pathnames "src/definitions.lisp" source-root))
          (previous-function (symbol-function 'test-self-target))
          (active-check-count 0)
@@ -240,6 +244,27 @@
                   (context
                     (make-instance 'tool-context
                                    :configuration configuration
+                                   :worker nil
+                                   :conversation conversation
+                                   :mutation-checker checker))
+                  (outside-configuration
+                    (make-instance
+                     'configuration
+                     :source-root source-root
+                     :working-directory outside-workspace
+                     :data-root (configuration-data-root configuration)
+                     :state-root (configuration-state-root configuration)
+                     :cache-root (configuration-cache-root configuration)
+                     :codex-auth-path
+                     (configuration-codex-auth-path configuration)
+                     :model (configuration-model configuration)
+                     :reasoning-effort
+                     (configuration-reasoning-effort configuration)
+                     :provider-endpoint
+                     (configuration-provider-endpoint configuration)))
+                  (outside-context
+                    (make-instance 'tool-context
+                                   :configuration outside-configuration
                                    :worker nil
                                    :conversation conversation
                                    :mutation-checker checker))
@@ -376,6 +401,21 @@
                                      :if-exists :append
                                      :external-format :utf-8)
                (format stream "~%;; A user-made repository change.~%"))
+             (test-assert
+              (handler-case
+                  (progn
+                    (tool-execute
+                     commit-tool
+                     outside-context
+                     (json-object
+                      "title" "Misroute an unrelated workspace commit"
+                      "paths" (json-array "src/definitions.lisp")))
+                    nil)
+                (tool-error (condition)
+                  (search "current workspace" (autolith-error-message condition))))
+              "self.commit refuses Autolith source commits from another workspace")
+             (test-assert (= source-check-count 0)
+                          "a refused cross-workspace commit runs no source checks")
              (test-assert
               (tool-result-success-p
                (tool-execute

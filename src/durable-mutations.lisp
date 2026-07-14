@@ -654,6 +654,17 @@ an overlay file under the data root and loaded again at every startup."
            :tool-name "self.commit"))
   title)
 
+(-> self-require-source-workspace (configuration) null)
+(defun self-require-source-workspace (configuration)
+  "Require Autolith's tracked source tree to contain the current workspace."
+  (unless (uiop:subpathp (configuration-working-directory configuration)
+                         (configuration-source-root configuration))
+    (error 'tool-error
+           :message
+           "self.commit only commits user-directed changes to Autolith's own source repository while that repository is the current workspace. Use ordinary workspace Git commands for an unrelated repository."
+           :tool-name "self.commit"))
+  nil)
+
 (-> self-validate-commit-paths (configuration vector) list)
 (defun self-validate-commit-paths (configuration paths)
   "Return validated repository-relative PATHS beneath CONFIGURATION's source root."
@@ -692,6 +703,7 @@ an overlay file under the data root and loaded again at every startup."
            (title (self-validate-commit-title
                    (tool-argument arguments "title" :required t)))
            (raw-paths (tool-argument arguments "paths" :required t)))
+      (self-require-source-workspace configuration)
       (unless (vectorp raw-paths)
         (error 'tool-error
                :message "self.commit paths must be a JSON array."
