@@ -64,6 +64,14 @@ autolith --auth
 autolith
 #+END_SRC
 
+Nix users can build or run the pinned x86-64 Linux package directly. Its first
+launch creates the private recovery and active images without network access.
+
+#+BEGIN_SRC sh
+nix build .#
+nix run .#
+#+END_SRC
+
 Enter submits, Alt-Enter inserts a newline, and Ctrl-C clears a draft or exits
 from an empty prompt. Tab and Shift-Tab cycle command suggestions. Messages can
 be drafted and queued while AL is responding. Type =/help= for commands.
