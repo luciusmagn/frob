@@ -167,3 +167,55 @@
       (lisp-worker-pool-stop-all pool)
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
+
+(-> test-lisp-worker-image-snapshot () null)
+(defun test-lisp-worker-image-snapshot ()
+  "Test saving a modified REPL core and starting an independent clone from it."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (pool (lisp-worker-pool-create configuration)))
+    (unwind-protect
+         (let ((source (lisp-worker-pool-start pool "source" "pristine")))
+           (lisp-worker-request
+            source
+            :eval
+            '(:form "(defparameter *saved-worker-marker* 9001)"))
+           (let ((image
+                   (lisp-worker-save-image
+                    configuration
+                    source
+                    "diddled"
+                    "Carries a marker proving the modified SBCL heap was retained.")))
+             (test-assert
+              (and (string= (lisp-image-identifier image) "diddled")
+                   (lisp-image--plausible-core-p
+                    (lisp-image-core-pathname image)))
+              "saving a named REPL publishes a plausible immutable core")
+             (test-assert (lisp-worker-running-p source)
+                          "saving an image leaves the parent REPL running")
+             (let* ((clone (lisp-worker-pool-start pool "clone" "diddled"))
+                    (clone-result
+                      (lisp-worker-request
+                       clone
+                       :eval
+                       '(:form "*saved-worker-marker*")))
+                    (pristine
+                      (lisp-worker-pool-start pool "control" "pristine"))
+                    (pristine-result
+                      (lisp-worker-request
+                       pristine
+                       :eval
+                       '(:form "(boundp '*saved-worker-marker*)"))))
+               (test-assert
+                (equal (getf (rest clone-result) :values) '("9001"))
+                "a REPL started from the saved image inherits its modified heap")
+               (test-assert
+                (equal (getf (rest pristine-result) :values) '("NIL"))
+                "a pristine comparison REPL excludes saved-image modifications")
+               (test-assert
+                (search "clone  running  image diddled"
+                        (lisp-worker-pool-render pool))
+                "the pool identifies which REPL uses the modified image"))))
+      (lisp-worker-pool-stop-all pool)
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)

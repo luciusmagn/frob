@@ -55,6 +55,7 @@
     (test-workspace-tools)
     (test-lisp-image-manifests)
     (test-lisp-worker-protocol)
+    (test-lisp-worker-image-snapshot)
     (test-self-tools)
     (test-self-restart-selection)
     (test-durable-self-mutation)

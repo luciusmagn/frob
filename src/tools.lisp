@@ -73,6 +73,10 @@
   ()
   (:documentation "List pristine and saved Lisp worker images with notes."))
 
+(defclass lisp-save-image-tool (lisp-tool)
+  ()
+  (:documentation "Save one named REPL as an immutable worker image."))
+
 (defclass self-inspect-tool (self-tool)
   ()
   (:documentation "Inspect a documented symbol in the active image."))
@@ -510,6 +514,18 @@
                 "lisp" "images"
                 "List pristine and saved worker images with compatibility, parentage, and durable notes."
                 empty-schema)
+      (register 'lisp-save-image-tool
+                "lisp" "save-image"
+                "Fork and save one named REPL as an immutable SBCL worker image, then boot-probe it and record why it exists."
+                (tool-object-schema
+                 (json-object
+                  "repl" (tool-string-property
+                           "The persistent REPL name; defaults to default.")
+                  "image" (tool-string-property
+                            "The new immutable image name.")
+                  "note" (tool-string-property
+                           "What changed in this image and when to use it."))
+                 '("image" "note")))
       (register 'self-inspect-tool
                 "self" "inspect"
                 "Inspect documentation, bindings, lambda list, and description for an active symbol."

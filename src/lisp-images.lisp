@@ -215,6 +215,95 @@
                                 (get-universal-time)))
     (lisp-image-load configuration identifier)))
 
+(-> lisp-image--source-commit (configuration) (option string))
+(defun lisp-image--source-commit (configuration)
+  "Return CONFIGURATION's current tracked source revision, when available."
+  (handler-case
+      (let ((output
+              (uiop:run-program
+               (list "git"
+                     "-C"
+                     (namestring (configuration-source-root configuration))
+                     "rev-parse"
+                     "HEAD")
+               :output :string
+               :error-output :output)))
+        (let ((commit
+                (string-trim '(#\Space #\Tab #\Newline #\Return) output)))
+          (and (non-empty-string-p commit) commit)))
+    (error ()
+      nil)))
+
+(-> lisp-image-staging-directory (configuration string) pathname)
+(defun lisp-image-staging-directory (configuration identifier)
+  "Return a fresh unpublished directory for saved image IDENTIFIER."
+  (lisp-image--validate-identifier identifier)
+  (merge-pathnames
+   (format nil ".~A.~A/" identifier (make-identifier))
+   (configuration-lisp-image-root configuration)))
+
+(-> lisp-image-publish-saved-core
+    (configuration
+     &key (:identifier string)
+          (:parent-identifier string)
+          (:note string)
+          (:staging-directory pathname))
+    lisp-image)
+(defun lisp-image-publish-saved-core
+    (configuration &key identifier parent-identifier note staging-directory)
+  "Atomically publish a validated core from STAGING-DIRECTORY."
+  (setf identifier (lisp-image--validate-identifier identifier))
+  (let* ((root (configuration-lisp-image-root configuration))
+         (directory (lisp-image--directory configuration identifier))
+         (staging-directory (uiop:ensure-directory-pathname staging-directory))
+         (staging-core (merge-pathnames "worker.core" staging-directory))
+         (staging-manifest (merge-pathnames "manifest.sexp" staging-directory))
+         (published-core (merge-pathnames "worker.core" directory)))
+    (unless (and (uiop:subpathp staging-directory root)
+                 (not (equal staging-directory directory))
+                 (lisp-image--plausible-core-p staging-core))
+      (error 'lisp-image-error
+             :message "The unpublished Lisp core is absent or outside its staging root."
+             :tool-name "lisp.save-image"
+             :pathname staging-core
+             :stage ':core))
+    (when (probe-file directory)
+      (error 'lisp-image-error
+             :message (format nil "Lisp image ~A already exists." identifier)
+             :tool-name "lisp.save-image"
+             :pathname directory
+             :stage ':publish))
+    (unless (and (or (string= parent-identifier
+                              +pristine-lisp-image-identifier+)
+                     (lisp-image-identifier-p parent-identifier))
+                 (non-empty-string-p note)
+                 (<= (length note) 4000))
+      (error 'lisp-image-error
+             :message "A Lisp image needs a valid parent and a note of at most 4000 characters."
+             :tool-name "lisp.save-image"
+             :pathname staging-manifest
+             :stage ':manifest))
+    (sb-posix:chmod (namestring staging-core) #o444)
+    (lisp-image--write-manifest
+     staging-manifest
+     (lisp-image--manifest-form identifier
+                                parent-identifier
+                                note
+                                published-core
+                                (lisp-image--source-commit configuration)
+                                (get-universal-time)))
+    (handler-case
+        (rename-file staging-directory directory)
+      (error (condition)
+        (error 'lisp-image-error
+               :message (format nil "Could not publish Lisp image ~A: ~A"
+                                identifier
+                                condition)
+               :tool-name "lisp.save-image"
+               :pathname directory
+               :stage ':publish)))
+    (lisp-image-load configuration identifier)))
+
 (-> lisp-image-load (configuration string) lisp-image)
 (defun lisp-image-load (configuration identifier)
   "Load and validate saved Lisp worker image IDENTIFIER."

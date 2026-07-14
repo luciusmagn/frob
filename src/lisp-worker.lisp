@@ -95,11 +95,26 @@
              :tool-name "lisp.start"
              :pathname (lisp-image-manifest-pathname image)
              :stage ':compatibility))
-    (make-instance 'lisp-worker
-                   :configuration configuration
-                   :name name
-                   :image-identifier image-identifier
-                   :core-pathname (and image (lisp-image-core-pathname image)))))
+    (lisp-worker--create-record
+     configuration
+     :name name
+     :image-identifier image-identifier
+     :core-pathname (and image (lisp-image-core-pathname image)))))
+
+(-> lisp-worker--create-record
+    (configuration
+     &key (:name string)
+          (:image-identifier string)
+          (:core-pathname (option pathname)))
+    lisp-worker)
+(defun lisp-worker--create-record
+    (configuration &key name image-identifier core-pathname)
+  "Create a stopped worker record with an already resolved CORE-PATHNAME."
+  (make-instance 'lisp-worker
+                 :configuration configuration
+                 :name name
+                 :image-identifier image-identifier
+                 :core-pathname core-pathname))
 
 (-> lisp-worker-running-p (lisp-worker) boolean)
 (defun lisp-worker-running-p (worker)
@@ -127,11 +142,9 @@
            (command
              (if (lisp-worker-core-pathname worker)
                  (list sbcl-command
+                       "--noinform"
                        "--core"
                        (namestring (lisp-worker-core-pathname worker))
-                       "--noinform"
-                       "--no-userinit"
-                       "--no-sysinit"
                        "--end-runtime-options")
                  (list sbcl-command
                        "--script"
@@ -325,6 +338,82 @@
                     (if (lisp-worker-running-p worker) "running" "stopped")
                     (lisp-worker-image-identifier worker))))
         "No named Lisp REPLs exist.")))
+
+
+;;;; -- Worker Image Snapshots --
+
+(-> lisp-worker--probe-core (configuration string pathname) null)
+(defun lisp-worker--probe-core (configuration identifier core-pathname)
+  "Boot unpublished CORE-PATHNAME and verify its protocol and image identity."
+  (let ((probe
+          (lisp-worker--create-record
+           configuration
+           :name "image-probe"
+           :image-identifier identifier
+           :core-pathname core-pathname)))
+    (unwind-protect
+         (let ((response
+                 (lisp-worker-request probe :eval '(:form "(+ 20 22)"))))
+           (unless (and (eq (getf (rest response) :status) :ok)
+                        (equal (getf (rest response) :values) '("42")))
+             (error 'lisp-image-error
+                    :message "The unpublished Lisp image failed its protocol probe."
+                    :tool-name "lisp.save-image"
+                    :pathname core-pathname
+                    :stage ':probe)))
+      (lisp-worker-stop probe)))
+  nil)
+
+(-> lisp-worker-save-image
+    (configuration lisp-worker string string)
+    lisp-image)
+(defun lisp-worker-save-image (configuration worker identifier note)
+  "Save WORKER as immutable IDENTIFIER with durable NOTE and return its image."
+  (lisp-image--validate-identifier identifier)
+  (unless (and (non-empty-string-p note) (<= (length note) 4000))
+    (error 'lisp-image-error
+           :message "A saved Lisp image needs a non-empty note of at most 4000 characters."
+           :tool-name "lisp.save-image"
+           :pathname nil
+           :stage ':manifest))
+  (let* ((directory (lisp-image--directory configuration identifier))
+         (staging (lisp-image-staging-directory configuration identifier))
+         (core (merge-pathnames "worker.core" staging)))
+    (when (probe-file directory)
+      (error 'lisp-image-error
+             :message (format nil "Lisp image ~A already exists." identifier)
+             :tool-name "lisp.save-image"
+             :pathname directory
+             :stage ':publish))
+    (ensure-directories-exist core)
+    (unwind-protect
+         (let ((response
+                 (lisp-worker-request
+                  worker
+                  :save-image
+                  (list :pathname (namestring core)
+                        :identifier identifier))))
+           (unless (eq (getf (rest response) :status) :ok)
+             (error 'lisp-image-error
+                    :message
+                    (format nil "The worker could not save image ~A: ~A"
+                            identifier
+                            (or (getf (rest response) :message)
+                                "unknown worker failure"))
+                    :tool-name "lisp.save-image"
+                    :pathname core
+                    :stage ':save))
+           (lisp-worker--probe-core configuration identifier core)
+           (lisp-image-publish-saved-core
+            configuration
+            :identifier identifier
+            :parent-identifier (lisp-worker-image-identifier worker)
+            :note note
+            :staging-directory staging))
+      (when (uiop:directory-exists-p staging)
+        (uiop:delete-directory-tree staging
+                                    :validate t
+                                    :if-does-not-exist :ignore)))))
 
 (-> lisp-worker-request (lisp-worker keyword list) list)
 (defun lisp-worker-request (worker operation arguments)
@@ -544,6 +633,27 @@
   (tool-success
    (lisp-image-render-inventory (tool-context-configuration context))))
 
+(defmethod tool-execute ((tool lisp-save-image-tool)
+                         (context tool-context)
+                         (arguments hash-table))
+  "Save one named REPL as an immutable worker image with a durable note."
+  (declare (ignore tool))
+  (let* ((worker (lisp-tool-worker context arguments))
+         (identifier (tool-argument arguments "image" :required t))
+         (note (tool-argument arguments "note" :required t))
+         (image
+           (lisp-worker-save-image
+            (tool-context-configuration context)
+            worker
+            identifier
+            note)))
+    (tool-success
+     (format nil "Saved Lisp REPL ~A as image ~A.~%Parent: ~A~%Note: ~A"
+             (lisp-worker-name worker)
+             (lisp-image-identifier image)
+             (lisp-image-parent-identifier image)
+             (lisp-image-note image)))))
+
 
 ;;;; -- Worker Runtime --
 
@@ -585,10 +695,61 @@
                       (multiple-value-list (funcall function)))))))
       (values (mapcar #'worker-render-value result-values) output))))
 
+(-> worker--single-threaded-p () boolean)
+(defun worker--single-threaded-p ()
+  "Return true when the worker has no live Lisp thread besides this one."
+  (notany (lambda (thread)
+            (and (not (eq thread sb-thread:*current-thread*))
+                 (sb-thread:thread-alive-p thread)))
+          (sb-thread:list-all-threads)))
+
+(-> worker--save-image-child (pathname string) null)
+(defun worker--save-image-child (pathname identifier)
+  "Save this forked worker heap to PATHNAME with embedded IDENTIFIER."
+  (handler-case
+      (progn
+        (setf *worker-image-identifier* identifier)
+        (sb-ext:save-lisp-and-die
+         (namestring pathname)
+         :toplevel #'worker-main
+         :executable nil
+         :purify nil
+         :compression nil))
+    (error ()
+      (sb-posix:_exit 1)))
+  nil)
+
+(-> worker-save-image (pathname string) (values list string))
+(defun worker-save-image (pathname identifier)
+  "Fork a saver for this worker heap and return its portable result values."
+  (unless (worker--single-threaded-p)
+    (error 'worker-error
+           :message "A Lisp worker image requires exactly one live Lisp thread."
+           :tool-name "lisp.save-image"))
+  (when (probe-file pathname)
+    (error 'worker-error
+           :message "The unpublished Lisp worker core already exists."
+           :tool-name "lisp.save-image"))
+  (let ((saver-pid (sb-posix:fork)))
+    (if (zerop saver-pid)
+        (worker--save-image-child pathname identifier)
+        (multiple-value-bind (waited-pid status)
+            (sb-posix:waitpid saver-pid 0)
+          (unless (and (= waited-pid saver-pid)
+                       (sb-posix:wifexited status)
+                       (zerop (sb-posix:wexitstatus status)))
+            (error 'worker-error
+                   :message "The Lisp worker image saver failed."
+                   :tool-name "lisp.save-image")))))
+  (values (list (namestring pathname)) ""))
+
 (-> worker-dispatch (keyword list) (values list string))
 (defun worker-dispatch (operation arguments)
   "Execute worker OPERATION with portable ARGUMENTS."
   (ecase operation
+    (:save-image
+     (worker-save-image (pathname (getf arguments :pathname))
+                        (getf arguments :identifier)))
     (:eval
      (worker-capture-evaluation
       (lambda ()
