@@ -177,6 +177,7 @@
          (previous-function (symbol-function 'test-generation-replay-target))
          (previous-state-initialized-p *image-state-initialized-p*)
          (previous-commit-identifier *active-image-commit-identifier*)
+         (previous-history-commit *active-image-history-commit*)
          (previous-lineage-identifier *active-image-lineage-identifier*)
          (check-count 0)
          (checker
@@ -191,6 +192,7 @@
          (progn
            (setf *image-state-initialized-p* nil
                  *active-image-commit-identifier* nil
+                 *active-image-history-commit* nil
                  *active-image-lineage-identifier* nil)
            (test-assert (null (image-state-load configuration))
                         "generation capture initializes an empty image lineage")
@@ -215,6 +217,11 @@
                        (image-commit-identifier commit))
               "a generation records the exact private image commit")
              (test-assert
+              (string=
+               (or (generation-mutation-history-commit generation) "")
+               (or (image-commit-history-commit commit) ""))
+              "a generation records the exact private Git commit")
+             (test-assert
               (and (search "Return captured state." script)
                    (uiop:subpathp
                     (generation-reconstruction-pathname generation)
@@ -234,6 +241,7 @@
       (setf (symbol-function 'test-generation-replay-target) previous-function
             *image-state-initialized-p* previous-state-initialized-p
             *active-image-commit-identifier* previous-commit-identifier
+            *active-image-history-commit* previous-history-commit
             *active-image-lineage-identifier* previous-lineage-identifier)
       (remhash (definition-key '(defun test-generation-replay-target () 0))
                *exploratory-definitions*)
@@ -280,6 +288,9 @@
               "rollback selection cannot race asynchronous publication")
              (test-assert (= (generation-journal-position loaded) 27)
                           "generation manifests preserve mutation journal position")
+             (test-assert
+              (null (generation-mutation-history-commit loaded))
+              "base generations explicitly carry no private Git identity")
              (test-assert
               (and (generation-reconstruction-pathname loaded)
                    (probe-file (generation-reconstruction-pathname loaded))

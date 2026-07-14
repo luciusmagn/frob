@@ -55,6 +55,18 @@
     :reader recovery-generation-reconstruction-pathname
     :type (or null pathname)
     :documentation "The contained base-image reconstruction script, when present.")
+   (image-commit-identifier
+    :initarg :image-commit-identifier
+    :initform nil
+    :reader recovery-generation-image-commit-identifier
+    :type (or null string)
+    :documentation "The private image commit captured by this generation.")
+   (mutation-history-commit
+    :initarg :mutation-history-commit
+    :initform nil
+    :reader recovery-generation-mutation-history-commit
+    :type (or null string)
+    :documentation "The private Git commit retaining the captured image state.")
    (git-commit
     :initarg :git-commit
     :reader recovery-generation-git-commit
@@ -202,6 +214,26 @@
        (every (lambda (character) (digit-char-p character 16)) value)
        t))
 
+(serapeum:-> recovery-image-commit-identifier-p (t) boolean)
+(defun recovery-image-commit-identifier-p (value)
+  "Return true when VALUE is a safe private image-commit identifier."
+  (and (stringp value)
+       (plusp (length value))
+       (<= (length value) 128)
+       (every (lambda (character)
+                (or (alphanumericp character)
+                    (find character "-_")))
+              value)
+       t))
+
+(serapeum:-> recovery-history-commit-p (t) boolean)
+(defun recovery-history-commit-p (value)
+  "Return true when VALUE is one full private Git object identifier."
+  (and (stringp value)
+       (member (length value) '(40 64))
+       (every (lambda (character) (digit-char-p character 16)) value)
+       t))
+
 (serapeum:-> recovery-read-journal-records (pathname) list)
 (defun recovery-read-journal-records (pathname)
   "Read complete journal forms from PATHNAME, ignoring an incomplete final form."
@@ -282,6 +314,10 @@
          (identifier (and properties (getf properties :id)))
          (core-value (and properties (getf properties :core)))
          (commit (and properties (getf properties :git-commit)))
+         (image-commit-identifier
+           (and properties (getf properties :image-commit)))
+         (mutation-history-commit
+           (and properties (getf properties :mutation-history-commit)))
          (version (and properties (getf properties :version)))
          (reconstruction-value
            (and properties (getf properties :reconstruction)))
@@ -292,7 +328,7 @@
                 (pathname reconstruction-value))))
     (unless (and (listp form)
                  (eq (first form) :generation)
-                 (member version '(1 2))
+                 (member version '(1 2 3))
                  (recovery-identifier-p identifier)
                  (or (null expected-identifier)
                      (string= identifier expected-identifier))
@@ -304,6 +340,14 @@
                      (and reconstruction-pathname
                           (uiop:subpathp reconstruction-pathname directory)
                           (probe-file reconstruction-pathname)))
+                 (or (/= version 3)
+                     (if image-commit-identifier
+                         (and
+                          (recovery-image-commit-identifier-p
+                           image-commit-identifier)
+                          (recovery-history-commit-p
+                           mutation-history-commit))
+                         (null mutation-history-commit)))
                  (recovery-git-commit-p commit)
                  (stringp (getf properties :sbcl-version))
                  (stringp (getf properties :operating-system))
@@ -318,6 +362,8 @@
      :core-pathname core-pathname
      :manifest-pathname pathname
      :reconstruction-pathname reconstruction-pathname
+     :image-commit-identifier image-commit-identifier
+     :mutation-history-commit mutation-history-commit
      :git-commit commit
      :sbcl-version (getf properties :sbcl-version)
      :operating-system (getf properties :operating-system)
@@ -429,7 +475,8 @@
   (let ((generations (recovery-generation-list context)))
     (if generations
         (dolist (generation generations)
-          (format t "~A  ~A  source ~A~@[~%  replay ~A~]~%"
+          (format t
+                  "~A  ~A  source ~A~@[~%  image ~A~]~@[~%  history ~A~]~@[~%  replay ~A~]~%"
                   (recovery-sanitize-text
                    (recovery-generation-identifier generation))
                   (if (recovery-generation-compatible-p generation)
@@ -437,6 +484,14 @@
                       "incompatible")
                   (recovery-sanitize-text
                    (recovery-generation-git-commit generation))
+                  (and (recovery-generation-image-commit-identifier generation)
+                       (recovery-sanitize-text
+                        (recovery-generation-image-commit-identifier
+                         generation)))
+                  (and (recovery-generation-mutation-history-commit generation)
+                       (recovery-sanitize-text
+                        (recovery-generation-mutation-history-commit
+                         generation)))
                   (and (recovery-generation-reconstruction-pathname generation)
                        (recovery-sanitize-text
                         (namestring

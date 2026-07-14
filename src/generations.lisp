@@ -40,6 +40,12 @@
     :reader generation-image-commit-identifier
     :type (option string)
     :documentation "The private image commit captured by this generation.")
+   (mutation-history-commit
+    :initarg :mutation-history-commit
+    :initform nil
+    :reader generation-mutation-history-commit
+    :type (option string)
+    :documentation "The private Git commit retaining the captured image state.")
    (git-commit
     :initarg :git-commit
     :reader generation-git-commit
@@ -167,6 +173,9 @@
                    :reconstruction-pathname reconstruction-pathname
                    :image-commit-identifier
                    (and image-commit (image-commit-identifier image-commit))
+                   :mutation-history-commit
+                   (and image-commit
+                        (image-commit-history-commit image-commit))
                    :git-commit (or git-commit
                                    (string-trim
                                     '(#\Space #\Tab #\Newline #\Return)
@@ -188,12 +197,14 @@
 (defun generation-manifest-form (generation)
   "Return the portable ready manifest for GENERATION."
   (list :generation
-        :version 2
+        :version 3
         :id (generation-identifier generation)
         :core (namestring (generation-core-pathname generation))
         :reconstruction
         (namestring (generation-reconstruction-pathname generation))
         :image-commit (generation-image-commit-identifier generation)
+        :mutation-history-commit
+        (generation-mutation-history-commit generation)
         :git-commit (generation-git-commit generation)
         :journal-position (generation-journal-position generation)
         :sbcl-version (lisp-implementation-version)
@@ -206,10 +217,12 @@
 (defun generation-core-probe-record (generation)
   "Return the exact portable identity expected from GENERATION's saved core."
   (list :autolith-checkpoint-core
-        :version 2
+        :version 3
         :generation-id (generation-identifier generation)
         :git-commit (generation-git-commit generation)
-        :image-commit (generation-image-commit-identifier generation)))
+        :image-commit (generation-image-commit-identifier generation)
+        :mutation-history-commit
+        (generation-mutation-history-commit generation)))
 
 (-> generation-core-probe-output (list) string)
 (defun generation-core-probe-output (record)
@@ -337,7 +350,7 @@
   (let ((form (read-portable-form pathname)))
     (unless (and (listp form)
                  (eq (first form) :generation)
-                 (member (getf (rest form) :version) '(1 2))
+                 (member (getf (rest form) :version) '(1 2 3))
                  (non-empty-string-p (getf (rest form) :id))
                  (non-empty-string-p (getf (rest form) :core))
                  (non-empty-string-p (getf (rest form) :git-commit)))
@@ -352,21 +365,32 @@
            (reconstruction-value (getf properties :reconstruction))
            (reconstruction-pathname
              (and (non-empty-string-p reconstruction-value)
-                  (pathname reconstruction-value))))
+                  (pathname reconstruction-value)))
+           (image-commit-identifier (getf properties :image-commit))
+           (mutation-history-commit
+             (getf properties :mutation-history-commit)))
       (unless (uiop:subpathp core-pathname directory)
         (error 'checkpoint-error
                :message "A generation core is outside its artifact directory."
                :stage ':manifest
                :pathname pathname))
-      (when (= version 2)
+      (when (member version '(2 3))
         (unless (and reconstruction-pathname
                      (uiop:subpathp reconstruction-pathname directory)
                      (probe-file reconstruction-pathname)
-                     (or (null (getf properties :image-commit))
+                     (or (null image-commit-identifier)
                          (image-commit--identifier-p
-                          (getf properties :image-commit))))
+                          image-commit-identifier)))
           (error 'checkpoint-error
                  :message "A generation reconstruction manifest is invalid."
+                 :stage ':manifest
+                 :pathname pathname)))
+      (when (= version 3)
+        (unless (if image-commit-identifier
+                    (image-history--commit-p mutation-history-commit)
+                    (null mutation-history-commit))
+          (error 'checkpoint-error
+                 :message "A generation mutation-history identity is invalid."
                  :stage ':manifest
                  :pathname pathname)))
       (make-instance 'generation
@@ -378,7 +402,8 @@
                      :manifest-pathname pathname
                      :reconstruction-pathname reconstruction-pathname
                      :image-commit-identifier
-                     (getf properties :image-commit)
+                     image-commit-identifier
+                     :mutation-history-commit mutation-history-commit
                      :git-commit (getf properties :git-commit)
                      :journal-position
                      (or (getf properties :journal-position) 0)
@@ -502,7 +527,8 @@
     (if generations
         (with-output-to-string (stream)
           (dolist (generation generations)
-            (format stream "~A  ~A  source ~A~%  image ~A~%  replay ~A~%"
+            (format stream
+                    "~A  ~A  source ~A~%  image ~A~%  history ~A~%  replay ~A~%"
                     (generation-identifier generation)
                     (if (generation-compatible-p generation)
                         "compatible"
@@ -510,6 +536,8 @@
                     (generation-git-commit generation)
                     (or (generation-image-commit-identifier generation)
                         "base")
+                    (or (generation-mutation-history-commit generation)
+                        "unavailable")
                     (if (generation-reconstruction-pathname generation)
                         (namestring
                          (generation-reconstruction-pathname generation))
