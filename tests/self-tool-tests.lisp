@@ -311,6 +311,7 @@
          (previous-setting *test-self-setting*)
          (previous-state-initialized-p *image-state-initialized-p*)
          (previous-commit-identifier *active-image-commit-identifier*)
+         (previous-history-commit *active-image-history-commit*)
          (previous-lineage-identifier *active-image-lineage-identifier*)
          (active-check-count 0)
          (checker
@@ -413,6 +414,7 @@
                (write-string "(defun test-broken-overlay (" stream))
              (setf *image-state-initialized-p* nil
                    *active-image-commit-identifier* nil
+                   *active-image-history-commit* nil
                    *active-image-lineage-identifier* nil)
              (let ((failures (image-state-load configuration)))
                (test-assert (= (length failures) 1)
@@ -457,6 +459,24 @@
                             "the persistence result identifies private storage")
                (test-assert first-commit
                             "durable persistence selects a private commit")
+               (test-assert
+                (image-history--commit-p
+                 (image-commit-history-commit first-commit))
+                "durable persistence records a private Git commit")
+               (test-assert
+                (uiop:directory-exists-p
+                 (merge-pathnames
+                  ".git/"
+                  (configuration-mutation-history-root configuration)))
+                "durable persistence initializes private Git history")
+               (test-assert
+                (string=
+                 (image-commit-history-commit first-commit)
+                 (string-trim
+                  '(#\Space #\Tab #\Newline #\Return)
+                  (image-history--git-command
+                   configuration '("rev-parse" "HEAD"))))
+                "the selected snapshot names the committed Git history state")
                (test-assert
                 (uiop:subpathp (image-commit-script-pathname first-commit)
                                (configuration-image-commit-root configuration))
@@ -627,7 +647,33 @@
                  (configuration-state-root configuration))
                 "self.commit selects its result beneath private Autolith state")
                (test-assert (string= head-before head-after)
-                            "self.commit never creates a Git commit")
+                            "self.commit never changes workspace Git history")
+               (test-assert
+                (string=
+                 (image-commit-history-commit committed)
+                 (string-trim
+                  '(#\Space #\Tab #\Newline #\Return)
+                  (image-history--git-command
+                   configuration '("rev-parse" "HEAD"))))
+                "self.commit advances private Git history")
+               (test-assert
+                (>= (parse-integer
+                     (image-history--git-command
+                      configuration '("rev-list" "--count" "HEAD"))
+                     :junk-allowed t)
+                    3)
+                "each durable snapshot receives a private Git commit")
+               (let* ((pointer
+                        (read-portable-form
+                         (configuration-current-image-commit-path
+                          configuration)))
+                      (properties (rest pointer)))
+                 (test-assert
+                  (and (= (getf properties :version) 2)
+                       (string=
+                        (getf properties :history-commit)
+                        (image-commit-history-commit committed)))
+                  "the atomic selection binds image and Git commit identities"))
                (test-assert
                 (search "A user-made repository change."
                         (uiop:read-file-string source-pathname))
@@ -637,10 +683,32 @@
              (test-assert
               (null (image-commit-pending-records configuration))
               "self.commit consumes every successful staged mutation")
-             (setf (symbol-function 'test-self-target) previous-function
-                   *test-self-setting* :baseline)
-             (test-assert (null (image-state-load configuration))
-                          "private startup replay loads without failures")
+             (let* ((committed (image-commit-current configuration))
+                    (identifier (image-commit-identifier committed))
+                    (canonical-directory
+                      (image-commit-directory committed))
+                    (history-directory
+                      (image-history--artifact-directory
+                       configuration identifier)))
+               (uiop:delete-directory-tree
+                history-directory :validate t :if-does-not-exist :ignore)
+               (uiop:delete-directory-tree
+                canonical-directory :validate t :if-does-not-exist :ignore)
+               (setf (symbol-function 'test-self-target) previous-function
+                     *test-self-setting* :baseline
+                     *image-state-initialized-p* nil
+                     *active-image-commit-identifier* nil
+                     *active-image-history-commit* nil
+                     *active-image-lineage-identifier* nil)
+               (test-assert (null (image-state-load configuration))
+                            "private startup replay loads without failures")
+               (test-assert
+                (and (probe-file
+                      (merge-pathnames "manifest.sexp" canonical-directory))
+                     (probe-file
+                      (merge-pathnames "reconstruct.lisp"
+                                       canonical-directory)))
+                "startup restores deleted replay artifacts from Git objects"))
              (test-assert (= (test-self-target) 86)
                           "startup replay reconstructs committed definitions")
              (test-assert (eq *test-self-setting* :committed-setting)
@@ -660,6 +728,7 @@
             *test-self-setting* previous-setting
             *image-state-initialized-p* previous-state-initialized-p
             *active-image-commit-identifier* previous-commit-identifier
+            *active-image-history-commit* previous-history-commit
             *active-image-lineage-identifier* previous-lineage-identifier)
       (when (fboundp 'test-legacy-image-target)
         (fmakunbound 'test-legacy-image-target))

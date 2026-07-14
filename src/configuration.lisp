@@ -296,6 +296,12 @@ Selecting a different model recomputes the context window for that model."
   "Return the directory containing immutable private image commits."
   (merge-pathnames "image-commits/" (configuration-data-root configuration)))
 
+(-> configuration-mutation-history-root (configuration) pathname)
+(defun configuration-mutation-history-root (configuration)
+  "Return the private Git repository backing durable mutation snapshots."
+  (merge-pathnames "mutation-history/"
+                   (configuration-state-root configuration)))
+
 (-> configuration-lisp-image-root (configuration) pathname)
 (defun configuration-lisp-image-root (configuration)
   "Return the directory containing immutable saved Lisp worker images."

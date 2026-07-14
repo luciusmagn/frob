@@ -131,6 +131,9 @@
 (defvar *active-image-commit-identifier* nil
   "The private image commit represented by the running image, or NIL for base.")
 
+(defvar *active-image-history-commit* nil
+  "The private Git commit backing the running image commit, or NIL for legacy state.")
+
 (defmacro with-live-mutation (&body body)
   "Evaluate BODY while excluding checkpoints and other live mutations."
   `(with-recursive-lock-held (*live-mutation-lock*)
