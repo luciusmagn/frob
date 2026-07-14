@@ -414,13 +414,15 @@ the active source or damaged active core. Its manifest records exact build-input
 provenance, and both installation and startup require a versioned core handshake.
 An absent or invalid pristine image falls back to the source launcher. Recovery
 sanitizes all terminal output, inspects pending
-mutation identities, creates a detached clean Git worktree at the manifest's
+mutation identities, creates a private detached Git checkout at the manifest's
 recorded commit, and points the resumed application at that source. A fatal
 active-path failure writes a private allowlisted crash capsule, publishes it to
 that launcher instance, exits with status 70, restores the terminal, and boots
 the selected generation. If that generation fails fatally, recovery tries other
 compatible retained generations newest first, restoring terminal state and
-refreshing crash context between attempts.
+refreshing crash context between attempts. If no compatible retained generation
+exists or all of them fail, recovery creates a private clean checkout of the
+current committed source and boots it with the locked dependency setup.
 
 Worker images are never candidates for active startup, rollback, or recovery.
 Saving or loading an instrumented worker core does not replace the pinned SBCL

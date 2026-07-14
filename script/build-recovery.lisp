@@ -65,6 +65,7 @@
                              "recovery/runtime.lisp"
                              "recovery/launcher.lisp"
                              "bin/autolith"
+                             "bin/autolith-active"
                              "bin/autolith-runtime"
                              "script/check"
                              "script/check.lisp"
@@ -82,6 +83,8 @@
                      :source-launcher-blob
                      (source-blob "recovery/launcher.lisp")
                      :stable-launcher-blob (source-blob "bin/autolith")
+                     :active-source-launcher-blob
+                     (source-blob "bin/autolith-active")
                      :runtime-adapter-blob
                      (source-blob "bin/autolith-runtime")
                      :check-blob (source-blob "script/check")

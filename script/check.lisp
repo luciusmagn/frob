@@ -85,4 +85,49 @@
            (namestring source-root)
            "--list")
      :output :string
-     :error-output :output)))
+     :error-output :output)
+    (let* ((temporary-root
+             (uiop:ensure-directory-pathname
+              (merge-pathnames
+               (format nil "autolith-recovery-check-~D-~D/"
+                       (get-universal-time)
+                       (random most-positive-fixnum))
+               (uiop:temporary-directory))))
+           (temporary-data (merge-pathnames "data/" temporary-root))
+           (temporary-state (merge-pathnames "state/" temporary-root))
+           (temporary-cache (merge-pathnames "cache/" temporary-root))
+           (temporary-home (merge-pathnames "home/" temporary-root))
+           (expected-version
+             (format nil
+                     "autolith ~A"
+                     (symbol-value
+                      (find-symbol "+AUTOLITH-VERSION+" "AUTOLITH")))))
+      (unwind-protect
+           (progn
+             (ensure-directories-exist temporary-home)
+             (let ((output
+                     (uiop:run-program
+                      (list "env"
+                            (format nil "HOME=~A" temporary-home)
+                            (format nil "XDG_DATA_HOME=~A" temporary-data)
+                            (format nil "XDG_STATE_HOME=~A" temporary-state)
+                            (format nil "XDG_CACHE_HOME=~A" temporary-cache)
+                            (format nil "AUTOLITH_PROJECT_SETUP=~A"
+                                    quicklisp-setup)
+                            sbcl-command
+                            "--noinform"
+                            "--core" (namestring recovery-core)
+                            "--end-runtime-options"
+                            (namestring source-root)
+                            "--"
+                            "--version")
+                      :output :string
+                      :error-output :output)))
+               (unless (and (search "No compatible retained generation is available."
+                                    output)
+                            (search expected-version output))
+                 (error "Recovery without a retained generation failed: ~A"
+                        output))))
+        (uiop:delete-directory-tree temporary-root
+                                    :validate t
+                                    :if-does-not-exist :ignore)))))

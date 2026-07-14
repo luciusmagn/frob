@@ -233,11 +233,12 @@ source provenance and boot-probe each temporary image. The launcher repeats the
 versioned probes before use. It
 reports source loading immediately when the active image is missing or stale.
 Recovery reports
-sanitized crash and mutation context, creates exact-commit recovery worktrees,
+sanitized crash and mutation context, creates private exact-commit checkouts,
 and boots retained cores without loading damaged active source. A failed
 retained core restores terminal state, refreshes crash context, and falls through
-to another compatible generation. Rollback selection uses a dedicated process
-status to enter this path immediately.
+to another compatible generation. When no retained generation can boot, recovery
+starts a clean checkout of the current committed source. Rollback selection uses
+a dedicated process status to enter this path immediately.
 
 * Durable mutation
 

@@ -435,18 +435,17 @@
 
 (serapeum:-> recovery-newest-compatible-generation
     (recovery-context)
-    recovery-generation)
+    (or null recovery-generation))
 (defun recovery-newest-compatible-generation (context)
-  "Return CONTEXT's newest valid generation compatible with this host."
-  (or (find-if #'recovery-generation-compatible-p
-               (recovery-generation-list context))
-      (error "No compatible retained generation is available.")))
+  "Return CONTEXT's newest valid generation compatible with this host, if any."
+  (find-if #'recovery-generation-compatible-p
+           (recovery-generation-list context)))
 
 (serapeum:-> recovery-selected-generation-or-fallback
     (recovery-context)
-    recovery-generation)
+    (or null recovery-generation))
 (defun recovery-selected-generation-or-fallback (context)
-  "Return CONTEXT's selected generation or its newest compatible fallback."
+  "Return CONTEXT's selected generation or newest compatible fallback, if any."
   (let ((selected
           (handler-case
               (recovery-selected-generation context)
@@ -457,7 +456,7 @@
               nil))))
     (if (and selected (recovery-generation-compatible-p selected))
         selected
-        (progn
+        (let ((fallback (recovery-newest-compatible-generation context)))
           (if selected
               (format *error-output*
                       "Selected generation ~A is incompatible or corrupt.~%"
@@ -465,9 +464,12 @@
                        (recovery-generation-identifier selected)))
               (format *error-output*
                       "The selected-generation record is unusable.~%"))
-          (format *error-output*
-                  "Using the newest compatible retained generation.~%")
-          (recovery-newest-compatible-generation context)))))
+          (if fallback
+              (format *error-output*
+                      "Using the newest compatible retained generation.~%")
+              (format *error-output*
+                      "No compatible retained generation is available.~%"))
+          fallback))))
 
 (serapeum:-> recovery-print-generations (recovery-context) null)
 (defun recovery-print-generations (context)
@@ -629,45 +631,125 @@
 
 ;;;; -- Exact Source and Core Boot --
 
+(serapeum:-> recovery-git-output (pathname list) string)
+(defun recovery-git-output (repository arguments)
+  "Return trimmed output from one Git command in REPOSITORY."
+  (string-trim
+   '(#\Space #\Tab #\Newline #\Return)
+   (uiop:run-program
+    (append (list "git" "-C" (namestring repository)) arguments)
+    :output :string
+    :error-output :output)))
+
+(serapeum:-> recovery-source-commit (recovery-context) string)
+(defun recovery-source-commit (context)
+  "Return the validated commit currently checked out at CONTEXT's source root."
+  (let ((commit
+          (recovery-git-output
+           (recovery-context-source-root context)
+           '("rev-parse" "--verify" "HEAD^{commit}"))))
+    (unless (recovery-git-commit-p commit)
+      (error "The current source revision is not one full Git commit."))
+    commit))
+
+(serapeum:-> recovery-source-checkout-valid-p (pathname string) boolean)
+(defun recovery-source-checkout-valid-p (checkout commit)
+  "Return true when CHECKOUT is a clean detached copy of COMMIT."
+  (handler-case
+      (and (string= (recovery-git-output checkout '("rev-parse" "HEAD"))
+                    commit)
+           (zerop
+            (length
+             (recovery-git-output checkout '("status" "--porcelain"))))
+           t)
+    (error ()
+      nil)))
+
+(serapeum:-> recovery-source-checkout
+    (recovery-context string string)
+    pathname)
+(defun recovery-source-checkout (context commit identifier)
+  "Return a private clean checkout of COMMIT named by safe IDENTIFIER."
+  (unless (and (recovery-git-commit-p commit)
+               (recovery-identifier-p identifier))
+    (error "Invalid recovery source identity."))
+  (let* ((root (recovery-context-worktree-root context))
+         (checkout (merge-pathnames (format nil "~A/" identifier) root)))
+    (when (and (probe-file checkout)
+               (not (recovery-source-checkout-valid-p checkout commit)))
+      (uiop:delete-directory-tree checkout
+                                  :validate t
+                                  :if-does-not-exist :ignore))
+    (unless (probe-file checkout)
+      (ensure-directories-exist root)
+      (let ((temporary
+              (merge-pathnames
+               (format nil ".~A.~D.tmp/" identifier (sb-posix:getpid))
+               root)))
+        (when (probe-file temporary)
+          (uiop:delete-directory-tree temporary
+                                      :validate t
+                                      :if-does-not-exist :ignore))
+        (unwind-protect
+             (progn
+               (uiop:run-program
+                (list "git" "clone" "--quiet" "--no-checkout"
+                      "--no-hardlinks"
+                      (namestring (recovery-context-source-root context))
+                      (namestring temporary))
+                :output :string
+                :error-output :output)
+               (recovery-git-output temporary
+                                    (list "checkout" "--quiet" "--detach"
+                                          commit))
+               (unless (recovery-source-checkout-valid-p temporary commit)
+                 (error "The private recovery checkout failed validation."))
+               (rename-file temporary checkout))
+          (when (probe-file temporary)
+            (uiop:delete-directory-tree temporary
+                                        :validate t
+                                        :if-does-not-exist :ignore)))))
+    checkout))
+
 (serapeum:-> recovery-source-worktree
     (recovery-context recovery-generation)
     pathname)
 (defun recovery-source-worktree (context generation)
-  "Return a clean detached worktree for GENERATION's exact source revision."
-  (let* ((identifier (recovery-generation-identifier generation))
-         (commit (recovery-generation-git-commit generation))
-         (worktree
-           (merge-pathnames (format nil "~A/" identifier)
-                            (recovery-context-worktree-root context))))
-    (if (probe-file worktree)
-        (let ((actual
-                (string-trim
-                 '(#\Space #\Tab #\Newline #\Return)
-                 (uiop:run-program
-                  (list "git" "-C" (namestring worktree) "rev-parse" "HEAD")
-                  :output :string
-                  :error-output :output)))
-              (status
-                (uiop:run-program
-                 (list "git" "-C" (namestring worktree) "status" "--porcelain")
-                 :output :string
-                 :error-output :output)))
-          (unless (and (string= actual commit) (zerop (length status)))
-            (error "Recovery worktree ~A is not clean at commit ~A."
-                   (recovery-sanitize-text worktree)
-                   (recovery-sanitize-text commit))))
-        (progn
-          (ensure-directories-exist
-           (recovery-context-worktree-root context))
-          (uiop:run-program
-           (list "git"
-                 "-C" (namestring (recovery-context-source-root context))
-                 "worktree" "add" "--detach"
-                 (namestring worktree)
-                 commit)
-           :output :string
-           :error-output :output)))
-    worktree))
+  "Return a private clean checkout of GENERATION's exact source revision."
+  (recovery-source-checkout
+   context
+   (recovery-generation-git-commit generation)
+   (recovery-generation-identifier generation)))
+
+(serapeum:-> recovery-project-setup (recovery-context) (or null pathname))
+(defun recovery-project-setup (context)
+  "Return the usable locked dependency setup for recovery children, if any."
+  (let ((override (uiop:getenv "AUTOLITH_PROJECT_SETUP"))
+        (source-setup
+          (merge-pathnames ".qlot/setup.lisp"
+                           (recovery-context-source-root context))))
+    (cond
+      ((and override (plusp (length override)) (probe-file override))
+       (pathname override))
+      ((probe-file source-setup)
+       source-setup)
+      (t
+       nil))))
+
+(serapeum:-> recovery-prepare-source-environment
+    (recovery-context pathname)
+    null)
+(defun recovery-prepare-source-environment (context source-root)
+  "Point recovered children at SOURCE-ROOT and the original dependency store."
+  (sb-posix:setenv "AUTOLITH_SOURCE_ROOT" (namestring source-root) 1)
+  (sb-posix:setenv "AUTOLITH_RECOVERED" "1" 1)
+  (let ((project-setup (recovery-project-setup context)))
+    (if project-setup
+        (sb-posix:setenv "AUTOLITH_PROJECT_SETUP"
+                        (namestring project-setup)
+                        1)
+        (sb-posix:unsetenv "AUTOLITH_PROJECT_SETUP")))
+  nil)
 
 (serapeum:-> recovery-boot-generation
     (recovery-context recovery-generation list)
@@ -680,8 +762,7 @@
             (recovery-generation-identifier generation))))
   (let* ((worktree (recovery-source-worktree context generation))
          (sbcl-command (or (uiop:getenv "AUTOLITH_SBCL") "sbcl")))
-    (sb-posix:setenv "AUTOLITH_SOURCE_ROOT" (namestring worktree) 1)
-    (sb-posix:setenv "AUTOLITH_RECOVERED" "1" 1)
+    (recovery-prepare-source-environment context worktree)
     (let ((process
             (uiop:launch-program
              (append
@@ -697,6 +778,39 @@
              :error-output :interactive
              :wait nil)))
       (uiop:wait-process process))))
+
+(serapeum:-> recovery-boot-source
+    (recovery-context list)
+    integer)
+(defun recovery-boot-source (context forwarded-arguments)
+  "Boot clean committed source with FORWARDED-ARGUMENTS and return its status."
+  (let* ((commit (recovery-source-commit context))
+         (identifier (format nil "source-~A" commit))
+         (checkout (recovery-source-checkout context commit identifier))
+         (launcher (merge-pathnames "bin/autolith-active" checkout))
+         (sbcl-command (or (uiop:getenv "AUTOLITH_SBCL") "sbcl"))
+         (terminal-state (recovery-terminal-state-capture)))
+    (unless (probe-file launcher)
+      (error "The clean source checkout lacks bin/autolith-active."))
+    (format *error-output*
+            "Starting clean committed source ~A.~%"
+            (recovery-sanitize-text commit))
+    (recovery-prepare-source-environment context checkout)
+    (unwind-protect
+         (let ((process
+                 (uiop:launch-program
+                  (append (list sbcl-command
+                                "--noinform"
+                                "--script"
+                                (namestring launcher))
+                          forwarded-arguments)
+                  :directory checkout
+                  :input :interactive
+                  :output :interactive
+                  :error-output :interactive
+                  :wait nil)))
+           (uiop:wait-process process))
+      (recovery-terminal-state-restore terminal-state))))
 
 (serapeum:-> recovery-boot-with-fallback
     (recovery-context recovery-generation list
@@ -752,6 +866,26 @@
                          (recovery-sanitize-text
                           (recovery-generation-identifier generation)))))
     (error "No retained generation could be booted.")))
+
+(serapeum:-> recovery-boot-with-source-fallback
+    (recovery-context (or null recovery-generation) list
+     &key (:capsule (or null string)))
+    integer)
+(defun recovery-boot-with-source-fallback
+    (context selected forwarded-arguments &key capsule)
+  "Boot retained state when possible, otherwise boot clean committed source."
+  (if selected
+      (handler-case
+          (recovery-boot-with-fallback context
+                                       selected
+                                       forwarded-arguments
+                                       :capsule capsule)
+        (error (condition)
+          (format *error-output*
+                  "Retained-generation recovery failed: ~A~%"
+                  (recovery-sanitize-text condition))
+          (recovery-boot-source context forwarded-arguments)))
+      (recovery-boot-source context forwarded-arguments)))
 
 
 ;;;; -- Argument Parsing and Entry --
@@ -841,10 +975,11 @@
                                :expected-identifier generation)
                               (recovery-selected-generation-or-fallback
                                context))))
-                    (recovery-boot-with-fallback context
-                                                 selected
-                                                 forwarded
-                                                 :capsule reported-capsule)))))))))
+                    (recovery-boot-with-source-fallback
+                     context
+                     selected
+                     forwarded
+                     :capsule reported-capsule)))))))))
 
 (serapeum:-> recovery-main () null)
 (defun recovery-main ()
