@@ -10,6 +10,7 @@
   (make-instance 'configuration
                  :source-root (configuration-source-root configuration)
                  :working-directory workspace
+                 :config-root (configuration-config-root configuration)
                  :data-root (configuration-data-root configuration)
                  :state-root (configuration-state-root configuration)
                  :cache-root (configuration-cache-root configuration)

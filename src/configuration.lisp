@@ -55,6 +55,25 @@
   :documentation "The context window percentage that triggers compaction.")
 
 
+(-> environment-directory (string pathname) pathname)
+(defun environment-directory (variable fallback)
+  "Return directory VARIABLE as a pathname, or FALLBACK when it is unset."
+  (let ((value (uiop:getenv variable)))
+    (uiop:ensure-directory-pathname
+     (if (non-empty-string-p value)
+         (pathname value)
+         fallback))))
+
+(-> configuration--default-config-root () pathname)
+(defun configuration--default-config-root ()
+  "Return Autolith's default XDG configuration directory."
+  (merge-pathnames
+   "autolith/"
+   (environment-directory "XDG_CONFIG_HOME"
+                          (merge-pathnames ".config/"
+                                           (user-homedir-pathname)))))
+
+
 ;;;; -- Configuration Object --
 
 (defclass configuration ()
@@ -68,6 +87,12 @@
     :reader configuration-working-directory
     :type pathname
     :documentation "The workspace visible to the agent and Lisp worker.")
+   (config-root
+    :initarg :config-root
+    :initform (configuration--default-config-root)
+    :reader configuration-config-root
+    :type pathname
+    :documentation "The root for user-editable Autolith configuration.")
    (data-root
     :initarg :data-root
     :reader configuration-data-root
@@ -77,17 +102,12 @@
     :initarg :state-root
     :reader configuration-state-root
     :type pathname
-    :documentation "The root for mutable state such as credentials and journals.")
+    :documentation "The root for mutable runtime state such as queues and journals.")
    (cache-root
     :initarg :cache-root
     :reader configuration-cache-root
     :type pathname
     :documentation "The root for replaceable caches and temporary artifacts.")
-   (config-root
-    :initarg :config-root
-    :reader configuration-config-root
-    :type pathname
-    :documentation "The root for user-authored executable configuration.")
    (codex-auth-path
     :initarg :codex-auth-path
     :reader configuration-codex-auth-path
@@ -165,15 +185,6 @@
             (configuration-compaction-threshold-percent configuration))
          100))
 
-(-> environment-directory (string pathname) pathname)
-(defun environment-directory (variable fallback)
-  "Return directory VARIABLE as a pathname, or FALLBACK when it is unset."
-  (let ((value (uiop:getenv variable)))
-    (uiop:ensure-directory-pathname
-     (if (non-empty-string-p value)
-         (pathname value)
-         fallback))))
-
 (-> configuration-create (&key
                            (:source-root (option pathname))
                            (:working-directory (option pathname))
@@ -185,30 +196,30 @@
     (&key source-root working-directory model reasoning-effort immutable-p)
   "Create validated runtime configuration from explicit values and the environment."
   (let* ((home (user-homedir-pathname))
-         (data-home (environment-directory
+           (config-home (environment-directory
+                         "XDG_CONFIG_HOME"
+                         (merge-pathnames ".config/" home)))
+           (data-home (environment-directory
                      "XDG_DATA_HOME"
                      (merge-pathnames ".local/share/" home)))
-         (state-home (environment-directory
-                      "XDG_STATE_HOME"
-                      (merge-pathnames ".local/state/" home)))
-         (cache-home (environment-directory
-                      "XDG_CACHE_HOME"
-                      (merge-pathnames ".cache/" home)))
-         (config-home (environment-directory
-                       "XDG_CONFIG_HOME"
-                       (merge-pathnames ".config/" home)))
-         (codex-home (environment-directory
-                      "CODEX_HOME"
-                      (merge-pathnames ".codex/" home)))
-         (environment-source-root (uiop:getenv "AUTOLITH_SOURCE_ROOT"))
-         (selected-model (or model (uiop:getenv "AUTOLITH_MODEL") +default-model+))
-         (selected-effort (or reasoning-effort
-                              (uiop:getenv "AUTOLITH_REASONING_EFFORT")
-                              +default-reasoning-effort+))
-         (selected-web-search (let ((mode (uiop:getenv "AUTOLITH_WEB_SEARCH")))
-                                (if (non-empty-string-p mode)
-                                    (string-downcase mode)
-                                    "cached"))))
+           (state-home (environment-directory
+                        "XDG_STATE_HOME"
+                        (merge-pathnames ".local/state/" home)))
+           (cache-home (environment-directory
+                        "XDG_CACHE_HOME"
+                        (merge-pathnames ".cache/" home)))
+           (codex-home (environment-directory
+                        "CODEX_HOME"
+                        (merge-pathnames ".codex/" home)))
+           (environment-source-root (uiop:getenv "AUTOLITH_SOURCE_ROOT"))
+           (selected-model (or model (uiop:getenv "AUTOLITH_MODEL") +default-model+))
+           (selected-effort (or reasoning-effort
+                                (uiop:getenv "AUTOLITH_REASONING_EFFORT")
+                                +default-reasoning-effort+))
+           (selected-web-search (let ((mode (uiop:getenv "AUTOLITH_WEB_SEARCH")))
+                                  (if (non-empty-string-p mode)
+                                      (string-downcase mode)
+                                      "cached"))))
     (unless (member selected-effort +supported-reasoning-efforts+ :test #'string=)
       (error 'configuration-error
              :message (format nil "Unsupported reasoning effort ~S." selected-effort)))
@@ -225,10 +236,10 @@
                                      (asdf:system-source-directory :autolith)))
                    :working-directory (uiop:ensure-directory-pathname
                                        (or working-directory (uiop:getcwd)))
+                   :config-root (merge-pathnames "autolith/" config-home)
                    :data-root (merge-pathnames "autolith/" data-home)
                    :state-root (merge-pathnames "autolith/" state-home)
                    :cache-root (merge-pathnames "autolith/" cache-home)
-                   :config-root (merge-pathnames "autolith/" config-home)
                    :codex-auth-path (merge-pathnames "auth.json" codex-home)
                    :model selected-model
                    :reasoning-effort selected-effort
@@ -259,10 +270,10 @@ Selecting a different model recomputes the context window for that model."
                  :working-directory (or working-directory
                                         (configuration-working-directory
                                          configuration))
+                 :config-root (configuration-config-root configuration)
                  :data-root (configuration-data-root configuration)
                  :state-root (configuration-state-root configuration)
                  :cache-root (configuration-cache-root configuration)
-                 :config-root (configuration-config-root configuration)
                  :codex-auth-path (configuration-codex-auth-path configuration)
                  :model (or model (configuration-model configuration))
                  :reasoning-effort (or reasoning-effort
@@ -360,15 +371,41 @@ Selecting a different model recomputes the context window for that model."
                             +supported-models+)))
   (configuration--clone configuration :model model))
 
+(-> configuration--migrate-state-file (configuration string) null)
+(defun configuration--migrate-state-file (configuration name)
+  "Move legacy configuration NAME from state root when no new copy exists."
+  (let ((legacy (merge-pathnames name (configuration-state-root configuration)))
+        (current (merge-pathnames name (configuration-config-root configuration))))
+    (when (and (probe-file legacy) (not (probe-file current)))
+      (handler-case
+          (progn
+            (uiop:rename-file-overwriting-target legacy current)
+            (sb-posix:chmod (namestring current) #o600))
+        (error (rename-cause)
+          (handler-case
+              (progn
+                (uiop:copy-file legacy current)
+                (delete-file legacy)
+                (sb-posix:chmod (namestring current) #o600))
+            (error (copy-cause)
+              (error 'configuration-error
+                     :message
+                     (format nil
+                             "Could not migrate ~A to ~A: ~A; fallback copy failed: ~A"
+                             legacy current rename-cause copy-cause)))))))
+    nil))
+
 (-> configuration-ensure-directories (configuration) configuration)
 (defun configuration-ensure-directories (configuration)
-  "Create CONFIGURATION's private data, state, cache, and config directories."
-  (dolist (directory (list (configuration-data-root configuration)
-                           (configuration-state-root configuration)
-                           (configuration-cache-root configuration)
-                           (configuration-config-root configuration)))
+  "Create CONFIGURATION's private config, data, state, and cache directories."
+  (dolist (directory (list (configuration-config-root configuration)
+                            (configuration-data-root configuration)
+                            (configuration-state-root configuration)
+                            (configuration-cache-root configuration)))
     (ensure-directories-exist directory))
-  configuration)
+    (dolist (name '("auth.sexp" "permissions.sexp" "preferences.sexp"))
+      (configuration--migrate-state-file configuration name))
+    configuration)
 
 (-> configuration-conversation-root (configuration) pathname)
 (defun configuration-conversation-root (configuration)
@@ -420,12 +457,12 @@ Selecting a different model recomputes the context window for that model."
 (-> configuration-preferences-path (configuration) pathname)
 (defun configuration-preferences-path (configuration)
   "Return the atomic global preferences pathname."
-  (merge-pathnames "preferences.sexp" (configuration-state-root configuration)))
+  (merge-pathnames "preferences.sexp" (configuration-config-root configuration)))
 
 (-> configuration-permissions-path (configuration) pathname)
 (defun configuration-permissions-path (configuration)
   "Return the atomic persistent command-permission pathname."
-  (merge-pathnames "permissions.sexp" (configuration-state-root configuration)))
+  (merge-pathnames "permissions.sexp" (configuration-config-root configuration)))
 
 (-> configuration-later-path (configuration) pathname)
 (defun configuration-later-path (configuration)
@@ -435,7 +472,7 @@ Selecting a different model recomputes the context window for that model."
 (-> configuration-auth-path (configuration) pathname)
 (defun configuration-auth-path (configuration)
   "Return Autolith's private OAuth credential pathname."
-  (merge-pathnames "auth.sexp" (configuration-state-root configuration)))
+  (merge-pathnames "auth.sexp" (configuration-config-root configuration)))
 
 (-> configuration-journal-path (configuration) pathname)
 (defun configuration-journal-path (configuration)

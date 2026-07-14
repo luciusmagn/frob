@@ -115,6 +115,7 @@
     (test-crash-capsule-correlation)
     (run-device-authentication-tests)
     (run-agent-tests)
+    (test-task-orchestration)
     (run-terminal-tests)
     (run-layout-tests)
     (run-markdown-tests)

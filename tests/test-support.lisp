@@ -25,6 +25,7 @@
     (make-instance 'configuration
                    :source-root source-root
                    :working-directory source-root
+                   :config-root (merge-pathnames "config/" root)
                    :data-root (merge-pathnames "data/" root)
                    :state-root (merge-pathnames "state/" root)
                    :cache-root (merge-pathnames "cache/" root)
@@ -46,6 +47,7 @@
     (make-instance 'configuration
                    :source-root source-root
                    :working-directory source-root
+                   :config-root (merge-pathnames "config/" state-root)
                    :data-root (merge-pathnames "data/" state-root)
                    :state-root (merge-pathnames "state/" state-root)
                    :cache-root (merge-pathnames "cache/" state-root)

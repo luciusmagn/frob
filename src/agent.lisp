@@ -370,57 +370,61 @@
     null)
 (defun agent--execute-tool-calls (agent calls &key observer tool-round)
   "Execute CALLS sequentially and append one correlated result for every call."
-  (let ((context
-          (make-instance 'tool-context
-                         :configuration (agent-configuration agent)
-                         :worker (agent-worker agent)
-                         :conversation (agent-conversation agent)
-                         :registry (agent-tool-registry agent)
-                         :command-authorization-function
-                         (lambda (command directory)
-                           (agent-observer-authorize-command
-                            observer command directory)))))
-    (dolist (call calls)
-      (let* ((call-id (json-get call "call_id"))
-             (tool-name (function-call-canonical-name call)))
+  (dolist (call calls)
+    (let* ((call-id (json-get call "call_id"))
+           (tool-name (function-call-canonical-name call))
+           (context
+             (make-instance 'tool-context
+                            :configuration (agent-configuration agent)
+                            :worker (agent-worker agent)
+                            :conversation (agent-conversation agent)
+                            :registry (agent-tool-registry agent)
+                            :agent agent
+                            :observer observer
+                            :call-id call-id
+                            :command-authorization-function
+                            (lambda (command directory)
+                              (agent-observer-authorize-command
+                               observer command directory)))))
+      (agent-observer-status
+       observer
+       :tool-call-started
+       (list :tool-round tool-round
+             :call-id call-id
+             :tool tool-name))
+      (let* ((real-start (get-internal-real-time))
+             (cpu-start (get-internal-run-time))
+             (result
+               (tool-registry-execute-call
+                (agent-tool-registry agent)
+                call
+                context))
+             (cpu-microseconds
+               (round (* (- (get-internal-run-time) cpu-start) 1000000)
+                      internal-time-units-per-second))
+             (real-microseconds
+               (round (* (- (get-internal-real-time) real-start) 1000000)
+                      internal-time-units-per-second)))
+        (conversation-append-tool-result
+         (agent-conversation agent)
+         call-id
+         :tool-name tool-name
+         :output (tool-result-content result)
+         :image-attachments (tool-result-image-attachments result)
+         :success-p (tool-result-success-p result)
+         :cpu-microseconds cpu-microseconds
+         :real-microseconds real-microseconds)
         (agent-observer-status
          observer
-         :tool-call-started
+         :tool-call-completed
          (list :tool-round tool-round
                :call-id call-id
-               :tool tool-name))
-        (let* ((real-start (get-internal-real-time))
-               (cpu-start (get-internal-run-time))
-               (result
-                 (tool-registry-execute-call
-                  (agent-tool-registry agent)
-                  call
-                  context))
-               (cpu-microseconds
-                 (round (* (- (get-internal-run-time) cpu-start) 1000000)
-                        internal-time-units-per-second))
-               (real-microseconds
-                 (round (* (- (get-internal-real-time) real-start) 1000000)
-                        internal-time-units-per-second)))
-          (conversation-append-tool-result
-           (agent-conversation agent)
-           call-id
-           :tool-name tool-name
-           :output (tool-result-content result)
-           :image-attachments (tool-result-image-attachments result)
-           :success-p (tool-result-success-p result)
-           :cpu-microseconds cpu-microseconds
-           :real-microseconds real-microseconds)
-          (agent-observer-status
-           observer
-           :tool-call-completed
-           (list :tool-round tool-round
-                 :call-id call-id
-                 :tool tool-name
-                 :success-p (tool-result-success-p result)
-                 :cpu-microseconds cpu-microseconds
-                 :real-microseconds real-microseconds
-                 :output (tool-result-content result)))))))
+               :tool tool-name
+               :success-p (tool-result-success-p result)
+               :cpu-microseconds cpu-microseconds
+               :real-microseconds real-microseconds
+               :output (tool-result-content result)
+               :details (tool-result-details result))))))
   nil)
 
 (-> agent--apply-steering-input (agent agent-observer integer) null)

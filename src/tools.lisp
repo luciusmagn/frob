@@ -208,6 +208,12 @@
      "Operations in named, heap-isolated Common Lisp REPLs.")
     ((string= namespace "self")
      "Operations on the active Autolith Common Lisp image.")
+    ((string= namespace "task")
+     "In-process child-agent delegation with batching and detached jobs.")
+    ((string= namespace "job")
+     "Inspection, waiting, and cancellation for task jobs.")
+    ((string= namespace "yield")
+     "Required terminal result submission for child agents.")
     (t
      "Autolith operations.")))
 
@@ -257,7 +263,25 @@
     :initform nil
     :reader tool-context-command-authorization-function
     :type (option function)
-    :documentation "The callback deciding whether and how shell commands may run."))
+    :documentation "The callback deciding whether and how shell commands may run.")
+   (agent
+    :initarg :agent
+    :initform nil
+    :reader tool-context-agent
+    :type t
+    :documentation "The agent whose provider call requested this tool.")
+   (observer
+    :initarg :observer
+    :initform nil
+    :reader tool-context-observer
+    :type t
+    :documentation "The observer presenting the parent tool lifecycle.")
+   (call-id
+    :initarg :call-id
+    :initform nil
+    :reader tool-context-call-id
+    :type (option string)
+    :documentation "The provider function call identifier for this execution."))
   (:documentation "The explicit capabilities supplied to one tool execution."))
 
 (-> tool-context-authorize-command
@@ -295,6 +319,11 @@
     :type boolean
     :documentation "True when the tool operation succeeded."))
   (:documentation "The model-visible outcome of exactly one tool call."))
+
+(defgeneric tool-result-details (result)
+  (:documentation "Return RESULT's machine-readable details, or NIL when plain.")
+  (:method ((result tool-result))
+    nil))
 
 (-> tool-success (t &key (:image-attachments list)) tool-result)
 (defun tool-success (content &key image-attachments)

@@ -210,6 +210,7 @@
     application)
 (defun application-create (configuration &key conversation-id)
   "Create a connected application, loading CONVERSATION-ID when supplied."
+  (configuration-ensure-directories configuration)
   (let ((preferred-configuration
           (preferences-apply-model-selection configuration)))
     (context-runtime-reset)
@@ -234,8 +235,9 @@
                       configuration
                       :reasoning-summaries-p reasoning-traces-p))
            (registry
-             (make-default-tool-registry
-              :immutable-p (configuration-immutable-p configuration)))
+             (task-augment-tool-registry
+              (make-default-tool-registry
+               :immutable-p (configuration-immutable-p configuration))))
            (worker (lisp-worker-pool-create configuration))
            (agent (agent-create :configuration configuration
                                 :provider provider
@@ -317,8 +319,9 @@
                     :reasoning-summaries-p reasoning-traces-p))
          (worker (lisp-worker-pool-create configuration))
          (previous-registry (application-tool-registry application))
-         (registry (make-default-tool-registry
-                    :immutable-p effective-immutable-p))
+         (registry (task-augment-tool-registry
+                    (make-default-tool-registry
+                     :immutable-p effective-immutable-p)))
          (agent (agent-create :configuration configuration
                               :provider provider
                               :conversation conversation

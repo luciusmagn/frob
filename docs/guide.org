@@ -126,11 +126,11 @@ ln -sfn "$PWD/bin/autolith" ~/.local/bin/autolith
 * Authentication
 
 Autolith stores its own credentials in
-=${XDG_STATE_HOME:-~/.local/state}/autolith/auth.sexp= with mode 0600.
+=${XDG_CONFIG_HOME:-~/.config}/autolith/auth.sexp= with mode 0600.
 
 For the initial transition, Autolith may read =~/.codex/auth.json= once as a read-only
 bootstrap source when its private store is absent. It copies only the bounded
-access token and account ID into Autolith state. It never imports or spends Codex's
+access token and account ID into Autolith's private configuration. It never imports or spends Codex's
 refresh token, never reads Codex again while its private store exists, never
 writes that file, and never launches Codex. The imported access token cannot be
 renewed. To perform Autolith's proper device flow, run:
@@ -289,9 +289,13 @@ its latest model and effort, so =/resume= restores the choices used there.
 =/trace on= shows each provider reasoning summary as a bounded, Markdown-styled
 live trace above the status and prompt, then finalizes it once in the transcript.
 =/trace off= stops requesting and persisting new summaries. The choice is saved
-globally in =${XDG_STATE_HOME:-~/.local/state}/autolith/preferences.sexp= and
+globally in =${XDG_CONFIG_HOME:-~/.config}/autolith/preferences.sexp= and
 survives clean restarts. Autolith never displays raw reasoning text or encrypted
 reasoning payloads; these are model-provided summaries, not hidden chain-of-thought.
+
+User-defined child-agent roles are Markdown files under
+=${XDG_CONFIG_HOME:-~/.config}/autolith/agents/=. A project may override a role
+with a Markdown file under =.autolith/agents/= in the workspace.
 
 =/compact on=, the default, hides successful routine tool results while retaining
 failures, file-write and file-edit results, and arbitrary execution results from
@@ -454,7 +458,7 @@ Unknown commands ask before execution. Allowing once or permanently runs the
 command with an isolated network and a read-only host filesystem except for the
 workspace and temporary directories. A permanent approval matches the exact
 command text and canonical working directory and is stored privately in
-=${XDG_STATE_HOME:-~/.local/state}/autolith/permissions.sexp=. Use
+=${XDG_CONFIG_HOME:-~/.config}/autolith/permissions.sexp=. Use
 =/permissions= to return to ask mode, allow sandboxed commands for the session,
 let commands run with full user privileges for the session, list exact saved
 approvals, or clear them. Corrupt permission state is ignored with a warning and

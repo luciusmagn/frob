@@ -101,9 +101,11 @@ drafted and queued while AL is responding. Type =/help= for commands.
 - [[file:docs/autolith-minimal-technical-spec.org][docs/autolith-minimal-technical-spec.org]] is the product specification.
 - [[file:AGENTS.md][AGENTS.md]] defines repository, Lisp, testing, and commit policy.
 
-* Persistent state
+* Persistent paths
 
-Autolith keeps credentials, preferences, exact command approvals, and atomic selections under
+Autolith keeps credentials, preferences, exact command approvals, and static
+agent configuration under =${XDG_CONFIG_HOME:-~/.config}/autolith/=. Deferred
+inputs, live-mutation journals, and atomic selections belong under
 =${XDG_STATE_HOME:-~/.local/state}/autolith/=, including a private Git history
 of durable mutation snapshots. Conversations, canonical image commits,
 memories, generations, runtimes, matching implementation source, and worker
