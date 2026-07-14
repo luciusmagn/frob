@@ -205,13 +205,46 @@
     :documentation "Serializes fff lifecycle and query calls."))
   (:documentation "One lazily initialized, workspace-aware in-process fff index."))
 
+(defclass search-worker ()
+  ((process
+    :initform nil
+    :accessor search-worker-process
+    :type t
+    :documentation "The isolated fff helper process, or NIL.")
+   (input
+    :initform nil
+    :accessor search-worker-input
+    :type t
+    :documentation "The request stream connected to the helper process.")
+   (output
+    :initform nil
+    :accessor search-worker-output
+    :type t
+    :documentation "The response stream connected to the helper process.")
+   (next-request-id
+    :initform 1
+    :accessor search-worker-next-request-id
+    :type (integer 1)
+    :documentation "The next request identifier sent to the helper process.")
+   (source-root
+    :initform nil
+    :accessor search-worker-source-root
+    :type (option pathname)
+    :documentation "The Autolith source tree used by the running helper.")
+   (lock
+    :initform (make-lock "Autolith fff search worker")
+    :reader search-worker-lock
+    :type t
+    :documentation "Serializes helper lifecycle and request exchange."))
+  (:documentation "One restartable process containing the native fff index and watcher."))
+
 (defclass search-tool (workspace-tool)
   ((engine
     :initarg :engine
     :reader search-tool-engine
-    :type search-engine
-    :documentation "The index shared by every search tool in one registry."))
-  (:documentation "A workspace search operation backed by the private fff library."))
+    :type search-worker
+    :documentation "The isolated index worker shared by every search tool in one registry."))
+  (:documentation "A workspace search operation backed by an isolated private fff library."))
 
 (defclass search-files-tool (search-tool)
   ()
@@ -278,9 +311,9 @@
            (error ()
              nil)))))
 
-(-> search--load-library (configuration) t)
-(defun search--load-library (configuration)
-  "Load and return the pinned private fff library for CONFIGURATION."
+(-> search--validated-library-path (configuration) pathname)
+(defun search--validated-library-path (configuration)
+  "Return CONFIGURATION's existing private fff library after identity checks."
   (multiple-value-bind (library override-p)
       (search--library-path configuration)
     (let ((library (or (probe-file library) library)))
@@ -301,29 +334,35 @@
                  (merge-pathnames "script/bootstrap"
                                   (configuration-source-root configuration)))
          :pathname library))
-      (with-lock-held (*fff-library-lock*)
-        (cond
-          ((and *fff-library* (equal library *fff-library-path*))
-           *fff-library*)
-          (*fff-library*
-           (search--fail
-            ':load
-            (format nil "fff is already loaded from ~A instead of ~A."
-                    *fff-library-path*
-                    library)
-            :pathname library))
-          (t
-           (handler-case
-               (setf *fff-library* (load-foreign-library library)
-                     *fff-library-path* library)
-             (error (cause)
-               (search--fail
-                ':load
-                (format nil "Could not load the private fff library at ~A: ~A"
-                        library
-                        cause)
-                :pathname library
-                :cause cause)))))))))
+      library)))
+
+(-> search--load-library (configuration) t)
+(defun search--load-library (configuration)
+  "Load and return the pinned private fff library for CONFIGURATION."
+  (let ((library (search--validated-library-path configuration)))
+    (with-lock-held (*fff-library-lock*)
+      (cond
+        ((and *fff-library* (equal library *fff-library-path*))
+         *fff-library*)
+        (*fff-library*
+         (search--fail
+          ':load
+          (format nil "fff is already loaded from ~A instead of ~A."
+                  *fff-library-path*
+                  library)
+          :pathname library))
+        (t
+         (handler-case
+             (setf *fff-library* (load-foreign-library library)
+                   *fff-library-path* library)
+           (error (cause)
+             (search--fail
+              ':load
+              (format nil "Could not load the private fff library at ~A: ~A"
+                      library
+                      cause)
+              :pathname library
+              :cause cause))))))))
 
 (-> fff--foreign-string (t) (option string))
 (defun fff--foreign-string (pointer)
@@ -489,36 +528,6 @@
                                 workspace)
                         :pathname workspace))))
     (search-engine-handle engine)))
-
-(-> tool-registry--search-engines (tool-registry) list)
-(defun tool-registry--search-engines (registry)
-  "Return the distinct fff engines owned by REGISTRY."
-  (let ((seen (make-hash-table :test #'eq))
-        (engines nil))
-    (dolist (tool (tool-registry-tools registry))
-      (when (typep tool 'search-tool)
-        (let ((engine (search-tool-engine tool)))
-          (unless (gethash engine seen)
-            (setf (gethash engine seen) t)
-            (push engine engines)))))
-    engines))
-
-(-> tool-registry-close-search-state (tool-registry) null)
-(defun tool-registry-close-search-state (registry)
-  "Stop every native search engine owned by REGISTRY."
-  (dolist (engine (tool-registry--search-engines registry))
-    (search-engine-close engine))
-  nil)
-
-(-> tool-registry-detach-search-state (tool-registry) null)
-(defun tool-registry-detach-search-state (registry)
-  "Detach inherited native pointers before saving a forked Lisp image."
-  (dolist (engine (tool-registry--search-engines registry))
-    (search-engine-detach engine))
-  (setf *fff-library* nil
-        *fff-library-path* nil)
-  nil)
-
 
 ;;;; -- Result Rendering --
 
@@ -806,99 +815,3 @@
          +search-maximum-time-budget-milliseconds+)
         :context-lines
         (search-tool--bounded-integer arguments "context" 0 0 10)))
-
-(defmethod tool-execute ((tool search-files-tool)
-                         (context tool-context)
-                         (arguments hash-table))
-  "Fuzzy-search workspace file paths with fff."
-  (let ((query (search-tool--string-argument tool arguments "query" :required t))
-        (page (search-tool--bounded-integer arguments "page" 0 0 1000000))
-        (maximum-results
-          (search-tool--bounded-integer
-           arguments
-           "max-results"
-           +search-default-result-limit+
-           1
-           +search-maximum-result-limit+)))
-    (unless (non-empty-string-p query)
-      (error 'tool-error
-             :message "search.files requires a non-empty query."
-             :tool-name "search.files"))
-    (tool-success
-     (search-engine-search-files
-      (search-tool-engine tool)
-      (tool-context-configuration context)
-      query
-      :page page
-      :maximum-results maximum-results))))
-
-(defmethod tool-execute ((tool search-glob-tool)
-                         (context tool-context)
-                         (arguments hash-table))
-  "Filter workspace file paths by one literal fff glob."
-  (let ((pattern
-          (search-tool--string-argument tool arguments "pattern" :required t))
-        (page (search-tool--bounded-integer arguments "page" 0 0 1000000))
-        (maximum-results
-          (search-tool--bounded-integer
-           arguments
-           "max-results"
-           +search-default-result-limit+
-           1
-           +search-maximum-result-limit+)))
-    (unless (non-empty-string-p pattern)
-      (error 'tool-error
-             :message "search.glob requires a non-empty pattern."
-             :tool-name "search.glob"))
-    (tool-success
-     (search-engine-search-files
-      (search-tool-engine tool)
-      (tool-context-configuration context)
-      pattern
-      :glob-p t
-      :page page
-      :maximum-results maximum-results))))
-
-(defmethod tool-execute ((tool search-content-tool)
-                         (context tool-context)
-                         (arguments hash-table))
-  "Search workspace contents with fff plain, regex, or fuzzy matching."
-  (let ((query (search-tool--string-argument tool arguments "query" :required t))
-        (mode (string-downcase
-               (search-tool--string-argument tool arguments "mode"
-                                             :fallback "plain"))))
-    (unless (non-empty-string-p query)
-      (error 'tool-error
-             :message "search.content requires a non-empty query."
-             :tool-name "search.content"))
-    (tool-success
-     (apply #'search-engine-search-content
-            (search-tool-engine tool)
-            (tool-context-configuration context)
-            query
-            :mode mode
-            (search-tool--common-content-options arguments)))))
-
-(defmethod tool-execute ((tool search-multi-content-tool)
-                         (context tool-context)
-                         (arguments hash-table))
-  "Search workspace contents for any of several literal patterns with fff."
-  (let* ((value (tool-argument arguments "patterns" :required t))
-         (patterns (and (vectorp value) (coerce value 'list)))
-         (constraints
-           (search-tool--string-argument tool arguments "constraints")))
-    (unless (and patterns
-                 (every (lambda (pattern)
-                          (and (non-empty-string-p pattern)
-                               (not (find #\Newline pattern))))
-                        patterns))
-      (error 'tool-error
-             :message "search.multi-content requires non-empty literal patterns without newlines."
-             :tool-name "search.multi-content"))
-    (tool-success
-     (apply #'search-engine-search-multi-content
-            (search-tool-engine tool)
-            (tool-context-configuration context)
-            patterns
-            constraints
-            (search-tool--common-content-options arguments)))))

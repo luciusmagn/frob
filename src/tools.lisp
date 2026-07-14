@@ -407,7 +407,7 @@
 (defun make-default-tool-registry ()
   "Create the documented default Autolith tool registry."
   (let ((registry (make-instance 'tool-registry))
-        (search-engine (make-instance 'search-engine))
+        (search-worker (make-instance 'search-worker))
         (empty-schema (tool-object-schema (json-object) nil)))
     (flet ((register (class namespace name description parameters
                       &rest initialization-arguments)
@@ -476,7 +476,7 @@
                   "max-results" (tool-integer-property
                                  "Results per page from 1 to 100; default 20."))
                  '("query"))
-                :engine search-engine)
+                :engine search-worker)
       (register 'search-glob-tool
                 "search" "glob"
                 "Filter indexed workspace paths with one literal glob such as **/*.lisp."
@@ -489,7 +489,7 @@
                   "max-results" (tool-integer-property
                                  "Results per page from 1 to 100; default 20."))
                  '("pattern"))
-                :engine search-engine)
+                :engine search-worker)
       (register 'search-content-tool
                 "search" "content"
                 "Search indexed workspace contents. Plain matching is the default; put file or path constraints in the query, for example '*.lisp symbol', 'src/ symbol', or '!tests/ symbol'."
@@ -512,7 +512,7 @@
                   "time-budget-ms" (tool-integer-property
                                     "Search budget from 1 to 10000 milliseconds; default 3000."))
                  '("query"))
-                :engine search-engine)
+                :engine search-worker)
       (register 'search-multi-content-tool
                 "search" "multi-content"
                 "Search indexed contents once for any of several literal patterns, with optional file and path constraints."
@@ -533,7 +533,7 @@
                   "time-budget-ms" (tool-integer-property
                                     "Search budget from 1 to 10000 milliseconds; default 3000."))
                  '("patterns"))
-                :engine search-engine)
+                :engine search-worker)
       (register 'shell-run-tool
                 "shell" "run"
                 "Run one external command line in the workspace and return its exit code and combined output."

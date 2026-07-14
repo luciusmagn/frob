@@ -40,6 +40,7 @@
                    (uiop:directory-files source-directory "*.lisp"))))
     (sort (append '("bin/autolith"
                     "bin/autolith-active"
+                    "bin/autolith-search-worker"
                     "bin/autolith-runtime"
                     "script/build-active"
                     "script/build-active.lisp"

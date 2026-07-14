@@ -33,6 +33,7 @@
                              (:file "memory-tools")
                              (:file "workspace-tools")
                              (:file "search-tools")
+                             (:file "search-worker")
                              (:file "lisp-worker")
                              (:file "self-tools")
                              (:file "overlays")

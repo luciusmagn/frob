@@ -78,6 +78,7 @@
                 #:false)
   (:export #:main
            #:run-tests
+           #:search-worker-main
            #:worker-main))
 
 (in-package #:autolith)

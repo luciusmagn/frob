@@ -99,12 +99,14 @@
              (test-assert
               (eq (search-tool-engine files-tool)
                   (search-tool-engine multi-tool))
-              "one registry shares one watched index across search operations")
+              "one registry shares one isolated index across search operations")
              (let ((result (search-tests--call registry context
                                                "search" "files"
                                                "query" "model selection")))
                (test-assert (tool-result-success-p result)
-                            "search.files completes through the fff C ABI")
+                            (format nil
+                                    "search.files completes through the fff C ABI: ~A"
+                                    (tool-result-content result)))
                (test-assert (search "src/model-selection.lisp"
                                     (tool-result-content result))
                             "search.files returns fuzzy workspace-relative paths"))
@@ -145,10 +147,27 @@
                                  (not (search "docs/search-guide.org"
                                               (tool-result-content result))))
                             "search.multi-content honors separate file constraints"))
+             (let* ((worker (search-tool-engine files-tool))
+                    (failed-process (search-worker-process worker))
+                    (failed-pid (uiop:process-info-pid failed-process)))
+               (sb-posix:kill failed-pid sb-posix:sigkill)
+               (loop repeat 100
+                     while (uiop:process-alive-p failed-process)
+                     do (sleep 0.01))
+               (let ((result (search-tests--call registry context
+                                                 "search" "files"
+                                                 "query" "model selection")))
+                 (test-assert
+                  (and (tool-result-success-p result)
+                       (uiop:process-alive-p (search-worker-process worker))
+                       (/= failed-pid
+                           (uiop:process-info-pid
+                            (search-worker-process worker))))
+                  "a killed native helper is restarted without killing Autolith")))
              (tool-registry-close-search-state registry)
              (test-assert
-              (null (search-engine-handle (search-tool-engine files-tool)))
-              "closing a registry stops and clears its native watcher")))
+              (null (search-worker-process (search-tool-engine files-tool)))
+              "closing a registry stops and clears its isolated watcher")))
       (when registry
         (ignore-errors (tool-registry-close-search-state registry)))
       (if previous-library
