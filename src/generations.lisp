@@ -28,6 +28,18 @@
     :reader generation-manifest-pathname
     :type pathname
     :documentation "The portable generation manifest pathname.")
+   (reconstruction-pathname
+    :initarg :reconstruction-pathname
+    :initform nil
+    :reader generation-reconstruction-pathname
+    :type (option pathname)
+    :documentation "The complete base-image Lisp reconstruction script.")
+   (image-commit-identifier
+    :initarg :image-commit-identifier
+    :initform nil
+    :reader generation-image-commit-identifier
+    :type (option string)
+    :documentation "The private image commit captured by this generation.")
    (git-commit
     :initarg :git-commit
     :reader generation-git-commit
@@ -127,20 +139,34 @@
                    (configuration-state-root configuration)))
 
 (-> generation-create-record
-    (configuration &key (:git-commit (option string)))
+    (configuration &key (:git-commit (option string))
+                        (:mutation-checker (option mutation-checker)))
     generation)
-(defun generation-create-record (configuration &key git-commit)
+(defun generation-create-record (configuration &key git-commit mutation-checker)
   "Create a pending generation record with immutable artifact paths."
   (let* ((identifier (make-identifier))
          (directory (merge-pathnames
                      (format nil "~A/" identifier)
-                     (generation-root configuration))))
+                     (generation-root configuration)))
+         (reconstruction-pathname
+           (merge-pathnames "reconstruct.lisp" directory))
+         (image-commit
+           (image-commit-prepare-checkpoint
+            configuration
+            identifier
+            :checker (or mutation-checker
+                         (make-instance 'standard-mutation-checker)))))
+    (image-commit-write-generation-script
+     configuration reconstruction-pathname identifier image-commit)
     (make-instance 'generation
                    :identifier identifier
                    :directory directory
                    :core-pathname (merge-pathnames "autolith.core" directory)
                    :temporary-core-pathname (merge-pathnames ".autolith.core.tmp" directory)
                    :manifest-pathname (merge-pathnames "manifest.sexp" directory)
+                   :reconstruction-pathname reconstruction-pathname
+                   :image-commit-identifier
+                   (and image-commit (image-commit-identifier image-commit))
                    :git-commit (or git-commit
                                    (string-trim
                                     '(#\Space #\Tab #\Newline #\Return)
@@ -162,9 +188,12 @@
 (defun generation-manifest-form (generation)
   "Return the portable ready manifest for GENERATION."
   (list :generation
-        :version 1
+        :version 2
         :id (generation-identifier generation)
         :core (namestring (generation-core-pathname generation))
+        :reconstruction
+        (namestring (generation-reconstruction-pathname generation))
+        :image-commit (generation-image-commit-identifier generation)
         :git-commit (generation-git-commit generation)
         :journal-position (generation-journal-position generation)
         :sbcl-version (lisp-implementation-version)
@@ -177,9 +206,10 @@
 (defun generation-core-probe-record (generation)
   "Return the exact portable identity expected from GENERATION's saved core."
   (list :autolith-checkpoint-core
-        :version 1
+        :version 2
         :generation-id (generation-identifier generation)
-        :git-commit (generation-git-commit generation)))
+        :git-commit (generation-git-commit generation)
+        :image-commit (generation-image-commit-identifier generation)))
 
 (-> generation-core-probe-output (list) string)
 (defun generation-core-probe-output (record)
@@ -257,6 +287,15 @@
            :message "The checkpoint saver produced no core file."
            :stage ':publish
            :pathname (generation-temporary-core-pathname generation)))
+  (unless (and (generation-reconstruction-pathname generation)
+               (uiop:subpathp
+                (generation-reconstruction-pathname generation)
+                (generation-directory generation))
+               (probe-file (generation-reconstruction-pathname generation)))
+    (error 'checkpoint-error
+           :message "The checkpoint has no valid reconstruction script."
+           :stage ':publish
+           :pathname (generation-reconstruction-pathname generation)))
   (generation--validate-core-probe generation probe-runner)
   (uiop:rename-file-overwriting-target
    (generation-temporary-core-pathname generation)
@@ -298,7 +337,7 @@
   (let ((form (read-portable-form pathname)))
     (unless (and (listp form)
                  (eq (first form) :generation)
-                 (= (or (getf (rest form) :version) 0) 1)
+                 (member (getf (rest form) :version) '(1 2))
                  (non-empty-string-p (getf (rest form) :id))
                  (non-empty-string-p (getf (rest form) :core))
                  (non-empty-string-p (getf (rest form) :git-commit)))
@@ -306,24 +345,44 @@
              :message (format nil "Invalid generation manifest at ~A." pathname)
              :stage ':manifest
              :pathname pathname))
-    (let* ((directory (uiop:pathname-directory-pathname pathname))
-           (core-pathname (pathname (getf (rest form) :core))))
+    (let* ((properties (rest form))
+           (version (getf properties :version))
+           (directory (uiop:pathname-directory-pathname pathname))
+           (core-pathname (pathname (getf properties :core)))
+           (reconstruction-value (getf properties :reconstruction))
+           (reconstruction-pathname
+             (and (non-empty-string-p reconstruction-value)
+                  (pathname reconstruction-value))))
       (unless (uiop:subpathp core-pathname directory)
         (error 'checkpoint-error
                :message "A generation core is outside its artifact directory."
                :stage ':manifest
                :pathname pathname))
+      (when (= version 2)
+        (unless (and reconstruction-pathname
+                     (uiop:subpathp reconstruction-pathname directory)
+                     (probe-file reconstruction-pathname)
+                     (or (null (getf properties :image-commit))
+                         (image-commit--identifier-p
+                          (getf properties :image-commit))))
+          (error 'checkpoint-error
+                 :message "A generation reconstruction manifest is invalid."
+                 :stage ':manifest
+                 :pathname pathname)))
       (make-instance 'generation
-                     :identifier (getf (rest form) :id)
+                     :identifier (getf properties :id)
                      :directory directory
                      :core-pathname core-pathname
                      :temporary-core-pathname
                      (merge-pathnames ".autolith.core.tmp" directory)
                      :manifest-pathname pathname
-                     :git-commit (getf (rest form) :git-commit)
+                     :reconstruction-pathname reconstruction-pathname
+                     :image-commit-identifier
+                     (getf properties :image-commit)
+                     :git-commit (getf properties :git-commit)
                      :journal-position
-                     (or (getf (rest form) :journal-position) 0)
-                     :created-at (or (getf (rest form) :created-at) 0)
+                     (or (getf properties :journal-position) 0)
+                     :created-at (or (getf properties :created-at) 0)
                      :status ':ready))))
 
 (-> generation-compatible-p (generation) boolean)
@@ -443,12 +502,18 @@
     (if generations
         (with-output-to-string (stream)
           (dolist (generation generations)
-            (format stream "~A  ~A  commit ~A~%"
+            (format stream "~A  ~A  source ~A~%  image ~A~%  replay ~A~%"
                     (generation-identifier generation)
                     (if (generation-compatible-p generation)
                         "compatible"
                         "incompatible")
-                    (generation-git-commit generation))))
+                    (generation-git-commit generation)
+                    (or (generation-image-commit-identifier generation)
+                        "base")
+                    (if (generation-reconstruction-pathname generation)
+                        (namestring
+                         (generation-reconstruction-pathname generation))
+                        "unavailable for legacy generation"))))
         "No retained generations exist.")))
 
 

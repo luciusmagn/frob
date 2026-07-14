@@ -504,6 +504,82 @@
         *image-state-initialized-p* t)
   nil)
 
+(-> image-commit-prepare-checkpoint
+    (configuration string &key (:checker mutation-checker))
+    (option image-commit))
+(defun image-commit-prepare-checkpoint
+    (configuration generation-identifier
+     &key (checker (make-instance 'standard-mutation-checker)))
+  "Commit pending mutations for GENERATION-IDENTIFIER and return current state."
+  (let ((records (image-commit-pending-records configuration)))
+    (if (null records)
+        (image-commit-current configuration)
+        (let* ((identifier (make-identifier))
+               (title (format nil "Checkpoint generation ~A"
+                              generation-identifier))
+               (mutation-identifiers
+                 (mapcar (lambda (record) (getf (rest record) :id)) records)))
+          (mutation-journal-append
+           configuration
+           (list :mutation
+                 :kind :image-commit
+                 :id identifier
+                 :parent *active-image-commit-identifier*
+                 :title title
+                 :mutations mutation-identifiers
+                 :generation generation-identifier
+                 :result :pending))
+          (handler-case
+              (progn
+                (mutation-checker-check-active
+                 checker
+                 configuration
+                 (image-commit-render-pending configuration))
+                (let ((commit
+                        (image-commit-publish
+                         configuration title records nil
+                         :identifier identifier)))
+                  (mutation-journal-append
+                   configuration
+                   (list :mutation
+                         :kind :image-commit
+                         :id identifier
+                         :parent (image-commit-parent-identifier commit)
+                         :title title
+                         :mutations mutation-identifiers
+                         :generation generation-identifier
+                         :script (namestring
+                                  (image-commit-script-pathname commit))
+                         :result :committed))
+                  commit))
+            (error (condition)
+              (mutation-journal-append
+               configuration
+               (list :mutation
+                     :kind :image-commit
+                     :id identifier
+                     :parent *active-image-commit-identifier*
+                     :title title
+                     :mutations mutation-identifiers
+                     :generation generation-identifier
+                     :result :failed
+                     :condition (bounded-string condition :limit 2000)))
+              (error condition)))))))
+
+(-> image-commit-write-generation-script
+    (configuration pathname string (option image-commit))
+    pathname)
+(defun image-commit-write-generation-script
+    (configuration pathname generation-identifier commit)
+  "Write GENERATION-IDENTIFIER's complete base-image reconstruction script."
+  (image-commit-write-script
+   pathname
+   generation-identifier
+   "Retained generation reconstruction"
+   (if commit
+       (image-commit-entries commit)
+       (image-commit--legacy-entries configuration))))
+
 
 ;;;; -- Image Commit Tools --
 

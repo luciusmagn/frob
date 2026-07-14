@@ -16,6 +16,11 @@
   (declare (ignore generation))
   (test-generation-core-probe-runner-output runner))
 
+(-> test-generation-replay-target () integer)
+(defun test-generation-replay-target ()
+  "Return the baseline value used by generation reconstruction tests."
+  0)
+
 (-> generation-tests--generation (configuration string string) generation)
 (defun generation-tests--generation (configuration identifier git-commit)
   "Return a pending test generation named IDENTIFIER at GIT-COMMIT."
@@ -29,6 +34,8 @@
                    (merge-pathnames ".autolith.core.tmp" directory)
                    :manifest-pathname
                    (merge-pathnames "manifest.sexp" directory)
+                   :reconstruction-pathname
+                   (merge-pathnames "reconstruct.lisp" directory)
                    :git-commit git-commit
                    :journal-position 27
                    :created-at 4000000000
@@ -45,6 +52,15 @@
                           :element-type '(unsigned-byte 8))
     (write-byte 42 stream))
   (generation-temporary-core-pathname generation))
+
+(-> generation-tests--write-reconstruction (generation) pathname)
+(defun generation-tests--write-reconstruction (generation)
+  "Write GENERATION's deterministic test reconstruction script."
+  (image-commit-write-script
+   (generation-reconstruction-pathname generation)
+   (generation-identifier generation)
+   "Test generation reconstruction"
+   nil))
 
 (-> generation-tests--make-core-plausible (generation) pathname)
 (defun generation-tests--make-core-plausible (generation)
@@ -84,6 +100,7 @@
     (unwind-protect
          (progn
            (generation-tests--write-fake-core generation)
+           (generation-tests--write-reconstruction generation)
            (generation-publish configuration generation :probe-runner runner)
            (generation-tests--make-core-plausible generation)
            (delete-file (generation-current-pathname configuration))
@@ -152,6 +169,73 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> generation-tests--test-reconstruction-capture () null)
+(defun generation-tests--test-reconstruction-capture ()
+  "Test automatic mutation commits and per-generation replay scripts."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (previous-function (symbol-function 'test-generation-replay-target))
+         (previous-state-initialized-p *image-state-initialized-p*)
+         (previous-commit-identifier *active-image-commit-identifier*)
+         (previous-lineage-identifier *active-image-lineage-identifier*)
+         (check-count 0)
+         (checker
+           (make-instance
+            'callback-mutation-checker
+            :active-callback
+            (lambda (checked-configuration definition-source)
+              (declare (ignore checked-configuration definition-source))
+              (incf check-count)
+              "active generation checks passed")
+            :source-callback
+            (lambda (checked-configuration paths)
+              (declare (ignore checked-configuration paths))
+              (error "Generation capture must not run source checks here.")))))
+    (unwind-protect
+         (progn
+           (setf *image-state-initialized-p* nil
+                 *active-image-commit-identifier* nil
+                 *active-image-lineage-identifier* nil)
+           (test-assert (null (image-state-load configuration))
+                        "generation capture initializes an empty image lineage")
+           (self-install-definition
+            configuration
+            "(defun test-generation-replay-target () \"Return captured state.\" 73)")
+           (let* ((generation
+                    (generation-create-record
+                     configuration
+                     :git-commit "0123456789abcdef"
+                     :mutation-checker checker))
+                  (commit (image-commit-current configuration))
+                  (script
+                    (uiop:read-file-string
+                     (generation-reconstruction-pathname generation))))
+             (test-assert (= check-count 1)
+                          "checkpoint capture checks staged live mutations once")
+             (test-assert commit
+                          "checkpoint capture automatically creates a private commit")
+             (test-assert
+              (string= (or (generation-image-commit-identifier generation) "")
+                       (image-commit-identifier commit))
+              "a generation records the exact private image commit")
+             (test-assert
+              (and (search "Return captured state." script)
+                   (uiop:subpathp
+                    (generation-reconstruction-pathname generation)
+                    (generation-directory generation)))
+              "a generation receives a contained full replay script")
+             (test-assert
+              (null (image-commit-pending-records configuration))
+              "checkpoint capture consumes staged reconstructible mutations")))
+      (setf (symbol-function 'test-generation-replay-target) previous-function
+            *image-state-initialized-p* previous-state-initialized-p
+            *active-image-commit-identifier* previous-commit-identifier
+            *active-image-lineage-identifier* previous-lineage-identifier)
+      (remhash (definition-key '(defun test-generation-replay-target () 0))
+               *exploratory-definitions*)
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 
 ;;;; -- Subsystem Tests --
 
@@ -172,6 +256,7 @@
     (unwind-protect
          (progn
            (generation-tests--write-fake-core generation)
+           (generation-tests--write-reconstruction generation)
            (generation-publish configuration generation :probe-runner runner)
            (let ((loaded (generation-find configuration
                                           "generation-under-test")))
@@ -192,10 +277,45 @@
              (test-assert (= (generation-journal-position loaded) 27)
                           "generation manifests preserve mutation journal position")
              (test-assert
+              (and (generation-reconstruction-pathname loaded)
+                   (probe-file (generation-reconstruction-pathname loaded))
+                   (search "Autolith image reconstruction script"
+                           (uiop:read-file-string
+                            (generation-reconstruction-pathname loaded))))
+              "generation manifests retain a complete reconstruction script")
+             (test-assert
               (string= (generation-identifier
                         (generation-selected configuration))
                        "generation-under-test")
               "publication atomically selects the ready generation")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (directory (merge-pathnames "legacy-generation/"
+                                     (generation-root configuration)))
+         (manifest (merge-pathnames "manifest.sexp" directory))
+         (core (merge-pathnames "autolith.core" directory)))
+    (unwind-protect
+         (progn
+           (generation--write-form-atomically
+            manifest
+            (list :generation
+                  :version 1
+                  :id "legacy-generation"
+                  :core (namestring core)
+                  :git-commit "0123456789abcdef"
+                  :journal-position 11
+                  :sbcl-version (lisp-implementation-version)
+                  :operating-system (software-type)
+                  :operating-system-version (software-version)
+                  :architecture (machine-type)
+                  :created-at 3999999999))
+           (let ((legacy (generation-load-manifest manifest)))
+             (test-assert
+              (and (string= (generation-identifier legacy)
+                            "legacy-generation")
+                   (null (generation-reconstruction-pathname legacy)))
+              "version-one generation manifests remain readable")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration))
@@ -215,10 +335,21 @@
          (corrupt
            (generation-tests--generation configuration
                                          "corrupt-core"
-                                         "0123456789abcdef")))
+                                         "0123456789abcdef"))
+         (missing-reconstruction
+           (generation-tests--generation configuration
+                                         "missing-reconstruction"
+                                         "0123456789abcdef"))
+         (missing-runner
+           (make-instance
+            'test-generation-core-probe-runner
+            :output (generation-core-probe-output
+                     (generation-core-probe-record
+                      missing-reconstruction)))))
     (unwind-protect
          (progn
            (generation-tests--write-fake-core wrong-commit)
+           (generation-tests--write-reconstruction wrong-commit)
            (test-assert
             (handler-case
                 (progn
@@ -233,6 +364,7 @@
             (generation-tests--unpublished-p configuration wrong-commit)
             "a wrong probe identity leaves every publication path untouched")
            (generation-tests--write-fake-core corrupt)
+           (generation-tests--write-reconstruction corrupt)
            (test-assert
             (handler-case
                 (progn
@@ -243,9 +375,25 @@
             "the production probe rejects a corrupt fake core")
            (test-assert
             (generation-tests--unpublished-p configuration corrupt)
-            "a corrupt core leaves every publication path untouched"))
+            "a corrupt core leaves every publication path untouched")
+           (generation-tests--write-fake-core missing-reconstruction)
+           (test-assert
+            (handler-case
+                (progn
+                  (generation-publish configuration
+                                      missing-reconstruction
+                                      :probe-runner missing-runner)
+                  nil)
+              (checkpoint-error (condition)
+                (eq (checkpoint-error-stage condition) ':publish)))
+            "publication rejects a missing reconstruction script")
+           (test-assert
+            (generation-tests--unpublished-p configuration
+                                             missing-reconstruction)
+            "missing reconstruction leaves publication paths untouched"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   (generation-tests--test-rollback-control-path)
+  (generation-tests--test-reconstruction-capture)
   nil)
 
 (-> test-crash-capsule-correlation () null)

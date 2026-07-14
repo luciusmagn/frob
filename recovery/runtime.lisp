@@ -49,6 +49,12 @@
     :reader recovery-generation-manifest-pathname
     :type pathname
     :documentation "The validated manifest pathname.")
+   (reconstruction-pathname
+    :initarg :reconstruction-pathname
+    :initform nil
+    :reader recovery-generation-reconstruction-pathname
+    :type (or null pathname)
+    :documentation "The contained base-image reconstruction script, when present.")
    (git-commit
     :initarg :git-commit
     :reader recovery-generation-git-commit
@@ -276,10 +282,17 @@
          (identifier (and properties (getf properties :id)))
          (core-value (and properties (getf properties :core)))
          (commit (and properties (getf properties :git-commit)))
+         (version (and properties (getf properties :version)))
+         (reconstruction-value
+           (and properties (getf properties :reconstruction)))
          (directory (uiop:pathname-directory-pathname pathname))
-         (core-pathname (and (stringp core-value) (pathname core-value))))
-    (unless (and (eq (first form) :generation)
-                 (= (or (getf properties :version) 0) 1)
+         (core-pathname (and (stringp core-value) (pathname core-value)))
+         (reconstruction-pathname
+           (and (stringp reconstruction-value)
+                (pathname reconstruction-value))))
+    (unless (and (listp form)
+                 (eq (first form) :generation)
+                 (member version '(1 2))
                  (recovery-identifier-p identifier)
                  (or (null expected-identifier)
                      (string= identifier expected-identifier))
@@ -287,6 +300,10 @@
                           (car (last (pathname-directory directory))))
                  core-pathname
                  (uiop:subpathp core-pathname directory)
+                 (or (= version 1)
+                     (and reconstruction-pathname
+                          (uiop:subpathp reconstruction-pathname directory)
+                          (probe-file reconstruction-pathname)))
                  (recovery-git-commit-p commit)
                  (stringp (getf properties :sbcl-version))
                  (stringp (getf properties :operating-system))
@@ -300,6 +317,7 @@
      :identifier identifier
      :core-pathname core-pathname
      :manifest-pathname pathname
+     :reconstruction-pathname reconstruction-pathname
      :git-commit commit
      :sbcl-version (getf properties :sbcl-version)
      :operating-system (getf properties :operating-system)
@@ -407,18 +425,23 @@
 
 (serapeum:-> recovery-print-generations (recovery-context) null)
 (defun recovery-print-generations (context)
-  "Print retained generation identifiers, compatibility, and revisions."
+  "Print retained generation identifiers, revisions, and replay scripts."
   (let ((generations (recovery-generation-list context)))
     (if generations
         (dolist (generation generations)
-          (format t "~A  ~A  commit ~A~%"
+          (format t "~A  ~A  source ~A~@[~%  replay ~A~]~%"
                   (recovery-sanitize-text
                    (recovery-generation-identifier generation))
                   (if (recovery-generation-compatible-p generation)
                       "compatible"
                       "incompatible")
                   (recovery-sanitize-text
-                   (recovery-generation-git-commit generation))))
+                   (recovery-generation-git-commit generation))
+                  (and (recovery-generation-reconstruction-pathname generation)
+                       (recovery-sanitize-text
+                        (namestring
+                         (recovery-generation-reconstruction-pathname
+                          generation))))))
         (format t "No retained generations exist.~%")))
   nil)
 
