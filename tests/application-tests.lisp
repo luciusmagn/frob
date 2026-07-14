@@ -262,14 +262,18 @@
          (root (test-configuration-root configuration))
          (application (application-tests--ui-application :columns 60))
          (ui (application-ui application))
-         (terminal (terminal-ui-terminal ui)))
-    (setf (application-configuration application) configuration)
+         (terminal (terminal-ui-terminal ui))
+         (provider (provider-create configuration)))
+    (setf (application-configuration application) configuration
+          (application-provider application) provider)
     (terminal-ui-start ui)
     (unwind-protect
          (progn
            (application-trace-command application "on")
            (test-assert (application-reasoning-traces-p application)
                         "/trace on enables reasoning-summary presentation")
+           (test-assert (provider-reasoning-summaries-p provider)
+                        "/trace on opts provider requests into summaries")
            (test-assert (preferences-reasoning-traces-p configuration)
                         "/trace on persists its enabled state")
            (test-assert (search "enabled and saved"
@@ -289,6 +293,8 @@
            (application-trace-command application "off")
            (test-assert (not (application-reasoning-traces-p application))
                         "/trace off disables reasoning-summary presentation")
+           (test-assert (not (provider-reasoning-summaries-p provider))
+                        "/trace off stops requesting provider summaries")
            (test-assert (null (terminal-ui-preview-rows ui))
                         "/trace off removes an unfinished reasoning preview")
            (test-assert (not (preferences-reasoning-traces-p configuration))

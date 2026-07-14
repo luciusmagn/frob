@@ -316,6 +316,9 @@
   (preferences-set-reasoning-traces
    (application-configuration application)
    enabled-p)
+  (let ((provider (application-provider application)))
+    (when provider
+      (provider-set-reasoning-summaries provider enabled-p)))
   (setf (application-reasoning-traces-p application) enabled-p)
   (unless enabled-p
     (terminal-ui-set-preview-rows (application-ui application) nil))

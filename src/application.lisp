@@ -177,7 +177,9 @@
          (conversation (if conversation-id
                            (conversation-load-by-id configuration conversation-id)
                            (conversation-create configuration)))
-         (provider (provider-create configuration))
+         (provider (provider-create
+                    configuration
+                    :reasoning-summaries-p reasoning-traces-p))
          (registry (make-default-tool-registry))
          (worker (lisp-worker-pool-create configuration))
          (agent (agent-create :configuration configuration
@@ -229,7 +231,9 @@
                (conversation-identifier retained-conversation)))
              (t
               (conversation-create configuration))))
-         (provider (provider-create configuration))
+         (provider (provider-create
+                    configuration
+                    :reasoning-summaries-p reasoning-traces-p))
          (worker (lisp-worker-pool-create configuration))
          (registry (application-tool-registry application))
          (agent (agent-create :configuration configuration

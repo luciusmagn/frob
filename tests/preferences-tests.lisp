@@ -17,7 +17,11 @@
                         "enabled reasoning summaries survive a preference reload")
            (let ((application (application-create configuration)))
              (test-assert (application-reasoning-traces-p application)
-                          "new applications restore enabled reasoning summaries"))
+                          "new applications restore enabled reasoning summaries")
+             (test-assert
+              (provider-reasoning-summaries-p
+               (application-provider application))
+              "restored trace preferences opt provider requests into summaries"))
            (let ((mode (sb-posix:stat-mode
                         (sb-posix:stat (namestring pathname)))))
              (test-assert (= (logand mode #o777) #o600)
@@ -27,7 +31,12 @@
                         "disabled reasoning summaries survive a preference reload")
            (let ((application (application-create configuration)))
              (test-assert (not (application-reasoning-traces-p application))
-                          "new applications restore hidden reasoning summaries"))
+                          "new applications restore hidden reasoning summaries")
+             (test-assert
+              (not
+               (provider-reasoning-summaries-p
+                (application-provider application)))
+              "restored hidden preferences omit provider summaries"))
            (with-open-file (stream pathname
                                    :direction :output
                                    :if-exists :supersede

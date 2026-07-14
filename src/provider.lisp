@@ -106,6 +106,12 @@
     :reader provider-session-id
     :type non-empty-string
     :documentation "The stable provider session identifier.")
+   (reasoning-summaries-p
+    :initarg :reasoning-summaries-p
+    :initform nil
+    :accessor provider-reasoning-summaries-p
+    :type boolean
+    :documentation "Whether requests opt in to provider-visible reasoning summaries.")
    (rate-limits
     :initform nil
     :accessor provider-rate-limits
@@ -118,13 +124,16 @@
   (declare (ignore provider))
   nil)
 
-(-> provider-create (configuration) codex-subscription-provider)
-(defun provider-create (configuration)
+(-> provider-create
+    (configuration &key (:reasoning-summaries-p boolean))
+    codex-subscription-provider)
+(defun provider-create (configuration &key reasoning-summaries-p)
   "Create the default direct subscription provider for CONFIGURATION."
   (make-instance 'codex-subscription-provider
                  :configuration configuration
                  :credential-manager (credential-manager-create configuration)
-                 :session-id (make-identifier)))
+                 :session-id (make-identifier)
+                 :reasoning-summaries-p reasoning-summaries-p))
 
 (-> provider-with-configuration (model-provider configuration) model-provider)
 (defgeneric provider-with-configuration (provider configuration)
@@ -139,9 +148,29 @@
                          :configuration configuration
                          :credential-manager
                          (provider-credential-manager provider)
-                         :session-id (provider-session-id provider))))
+                         :session-id (provider-session-id provider)
+                         :reasoning-summaries-p
+                         (provider-reasoning-summaries-p provider))))
     (setf (provider-rate-limits copy) (copy-tree (provider-rate-limits provider)))
     copy))
+
+(-> provider-set-reasoning-summaries (model-provider boolean) model-provider)
+(defgeneric provider-set-reasoning-summaries (provider enabled-p)
+  (:documentation
+   "Set whether PROVIDER requests visible reasoning summaries when supported."))
+
+(defmethod provider-set-reasoning-summaries
+    ((provider model-provider) (enabled-p t))
+  "Leave providers without reasoning-summary support unchanged."
+  (declare (ignore enabled-p))
+  provider)
+
+(defmethod provider-set-reasoning-summaries
+    ((provider codex-subscription-provider) (enabled-p t))
+  "Set whether the Codex subscription provider requests reasoning summaries."
+  (check-type enabled-p boolean)
+  (setf (provider-reasoning-summaries-p provider) enabled-p)
+  provider)
 
 (-> provider-stream-turn
     (model-provider conversation vector function
@@ -312,6 +341,10 @@ asks for a context checkpoint handoff."
               tool-namespaces)))
          (budget-message (and (not compaction-p)
                               (responses-lite-budget-message turn-budget-state)))
+         (reasoning
+           (json-object
+            "effort" (configuration-wire-effort configuration)
+            "context" "all_turns"))
          (prefix (append
                   (list (responses-lite-additional-tools effective-tools)
                         (responses-lite-developer-message
@@ -326,17 +359,17 @@ asks for a context checkpoint handoff."
                                 (conversation-input-items conversation)
                                 (when compaction-p
                                   (list (responses-lite-developer-message
-                                         +compaction-instructions+))))
+                                        +compaction-instructions+))))
                         'vector)))
+    (when (and (provider-reasoning-summaries-p provider)
+               (not compaction-p))
+      (setf (gethash "summary" reasoning) "auto"))
     (json-object
      "model" (configuration-model configuration)
      "input" input
      "tool_choice" "auto"
      "parallel_tool_calls" false
-     "reasoning" (json-object
-                  "effort" (configuration-wire-effort configuration)
-                  "summary" "detailed"
-                  "context" "all_turns")
+     "reasoning" reasoning
      "store" false
      "stream" t
      "include" (json-array "reasoning.encrypted_content")

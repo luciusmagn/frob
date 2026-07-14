@@ -178,10 +178,36 @@
            (test-assert
             (string= (json-get (json-get request "reasoning") "effort") "max")
             "the provider request maps Ultra reasoning to Max")
-           (test-assert
-            (string= (json-get (json-get request "reasoning") "summary")
-                     "detailed")
-            "the provider request asks for visible detailed reasoning summaries")
+           (multiple-value-bind (value present-p)
+               (gethash "summary" (json-get request "reasoning"))
+             (declare (ignore value))
+             (test-assert (not present-p)
+                          "hidden traces do not request reasoning summaries"))
+           (let* ((trace-provider
+                    (provider-create configuration :reasoning-summaries-p t))
+                  (trace-request
+                    (provider-request-object
+                     trace-provider conversation schemas))
+                  (trace-reasoning (json-get trace-request "reasoning")))
+             (test-assert
+              (string= (json-get trace-reasoning "summary") "auto")
+              "visible traces request the best supported reasoning summary")
+             (let ((compaction-reasoning
+                     (json-get
+                      (provider-request-object
+                       trace-provider conversation schemas :compaction-p t)
+                      "reasoning")))
+               (multiple-value-bind (value present-p)
+                   (gethash "summary" compaction-reasoning)
+                 (declare (ignore value))
+                 (test-assert
+                  (not present-p)
+                  "side-channel compaction does not request unused summaries")))
+             (let ((reconfigured
+                     (provider-with-configuration trace-provider configuration)))
+               (test-assert
+                (provider-reasoning-summaries-p reconfigured)
+                "provider reconfiguration preserves the trace preference")))
            (test-assert
             (string= (json-get (json-get request "reasoning") "context")
                      "all_turns")

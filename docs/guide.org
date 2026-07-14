@@ -188,11 +188,10 @@ current session; =AUTOLITH_MODEL= still selects any model at startup.
 
 =/trace on= shows each provider reasoning summary as a bounded, Markdown-styled
 live trace above the status and prompt, then finalizes it once in the transcript.
-=/trace off= hides them. The choice is saved globally in
-=${XDG_STATE_HOME:-~/.local/state}/autolith/preferences.sexp=
-and survives clean restarts. Autolith never displays raw reasoning text or
-encrypted reasoning payloads; these are model-provided summaries, not hidden
-chain-of-thought.
+=/trace off= stops requesting and persisting new summaries. The choice is saved
+globally in =${XDG_STATE_HOME:-~/.local/state}/autolith/preferences.sexp= and
+survives clean restarts. Autolith never displays raw reasoning text or encrypted
+reasoning payloads; these are model-provided summaries, not hidden chain-of-thought.
 
 Context compaction keeps long conversations going. When the newest provider
 step reports total token usage at or beyond the compaction limit, Autolith asks
