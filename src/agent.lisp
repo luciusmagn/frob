@@ -240,7 +240,7 @@
                                    (conversation-create configuration))
                  :tool-registry (or tool-registry
                                     (make-default-tool-registry))
-                 :worker (or worker (lisp-worker-create configuration))
+                 :worker (or worker (lisp-worker-pool-create configuration))
                  :maximum-provider-steps maximum-provider-steps
                  :provider-step-warning provider-step-warning
                  :maximum-tool-calls maximum-tool-calls))

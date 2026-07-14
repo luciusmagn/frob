@@ -55,7 +55,23 @@
 
 (defclass lisp-reset-tool (lisp-tool)
   ()
-  (:documentation "Discard and recreate the Lisp worker."))
+  (:documentation "Reset one named Lisp REPL from a selected image."))
+
+(defclass lisp-start-tool (lisp-tool)
+  ()
+  (:documentation "Start one named Lisp REPL from a selected image."))
+
+(defclass lisp-stop-tool (lisp-tool)
+  ()
+  (:documentation "Stop and forget one named Lisp REPL."))
+
+(defclass lisp-repls-tool (lisp-tool)
+  ()
+  (:documentation "List the active named Lisp REPLs."))
+
+(defclass lisp-images-tool (lisp-tool)
+  ()
+  (:documentation "List pristine and saved Lisp worker images with notes."))
 
 (defclass self-inspect-tool (self-tool)
   ()
@@ -159,7 +175,7 @@
     ((string= namespace "shell")
      "External commands run in the workspace.")
     ((string= namespace "lisp")
-     "Operations in a separate disposable Common Lisp worker.")
+     "Operations in named, heap-isolated Common Lisp REPLs.")
     ((string= namespace "self")
      "Operations on the active Autolith Common Lisp image.")
     (t
@@ -349,10 +365,25 @@
 
 (-> required-form-schema (string) json-object)
 (defun required-form-schema (description)
-  "Return a closed schema containing one required Lisp FORM string."
+  "Return a closed schema containing FORM and an optional named REPL."
   (let ((properties (json-object
-                     "form" (tool-string-property description))))
+                     "form" (tool-string-property description)
+                     "repl" (tool-string-property
+                              "The persistent REPL name; defaults to default."))))
     (tool-object-schema properties '("form"))))
+
+(-> lisp-repl-control-schema (&key (:include-image boolean)) json-object)
+(defun lisp-repl-control-schema (&key include-image)
+  "Return the shared schema for named REPL lifecycle operations."
+  (let ((properties
+          (json-object
+           "repl" (tool-string-property
+                   "The persistent REPL name; defaults to default."))))
+    (when include-image
+      (setf (gethash "image" properties)
+            (tool-string-property
+             "The pristine or saved worker image; defaults to pristine.")))
+    (tool-object-schema properties nil)))
 
 (-> make-default-tool-registry () tool-registry)
 (defun make-default-tool-registry ()
@@ -433,29 +464,51 @@
                 (required-form-schema "One readable Common Lisp form."))
       (register 'lisp-load-system-tool
                 "lisp" "load-system"
-                "Load one ASDF or Quicklisp system in the disposable worker."
+                "Load one ASDF or Quicklisp system in a named persistent REPL."
                 (tool-object-schema
                  (json-object
-                  "system" (tool-string-property "The ASDF system name."))
+                  "system" (tool-string-property "The ASDF system name.")
+                  "repl" (tool-string-property
+                           "The persistent REPL name; defaults to default."))
                  '("system")))
       (register 'lisp-describe-tool
                 "lisp" "describe"
-                "Describe a readable Lisp object or symbol in the disposable worker."
+                "Describe a readable Lisp object or symbol in a named persistent REPL."
                 (tool-object-schema
                  (json-object
                   "designator" (tool-string-property
-                                "A readable Lisp form naming the object."))
+                                "A readable Lisp form naming the object.")
+                  "repl" (tool-string-property
+                           "The persistent REPL name; defaults to default."))
                  '("designator")))
       (register 'lisp-run-tests-tool
                 "lisp" "run-tests"
-                "Run ASDF tests for one system in the disposable worker."
+                "Run ASDF tests for one system in a named persistent REPL."
                 (tool-object-schema
                  (json-object
-                  "system" (tool-string-property "The ASDF system name."))
+                  "system" (tool-string-property "The ASDF system name.")
+                  "repl" (tool-string-property
+                           "The persistent REPL name; defaults to default."))
                  '("system")))
       (register 'lisp-reset-tool
                 "lisp" "reset"
-                "Discard the current Lisp worker and start a pristine one."
+                "Discard one named REPL and recreate it from pristine or a compatible saved image."
+                (lisp-repl-control-schema :include-image t))
+      (register 'lisp-start-tool
+                "lisp" "start"
+                "Start a named persistent REPL from pristine or a compatible saved image without silently switching an existing REPL."
+                (lisp-repl-control-schema :include-image t))
+      (register 'lisp-stop-tool
+                "lisp" "stop"
+                "Stop and forget one named persistent REPL."
+                (lisp-repl-control-schema))
+      (register 'lisp-repls-tool
+                "lisp" "repls"
+                "List named persistent REPLs, whether they are running, and their base images."
+                empty-schema)
+      (register 'lisp-images-tool
+                "lisp" "images"
+                "List pristine and saved worker images with compatibility, parentage, and durable notes."
                 empty-schema)
       (register 'self-inspect-tool
                 "self" "inspect"

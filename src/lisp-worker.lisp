@@ -2,12 +2,31 @@
 
 ;;;; -- Worker Process --
 
+(defvar *worker-image-identifier* +pristine-lisp-image-identifier+
+  "The pristine or saved image identity reported by this worker process.")
+
 (defclass lisp-worker ()
   ((configuration
     :initarg :configuration
     :reader lisp-worker-configuration
     :type configuration
     :documentation "The source and workspace paths inherited by the worker.")
+   (name
+    :initarg :name
+    :reader lisp-worker-name
+    :type non-empty-string
+    :documentation "The stable REPL name used to route Lisp tool calls.")
+   (image-identifier
+    :initarg :image-identifier
+    :reader lisp-worker-image-identifier
+    :type non-empty-string
+    :documentation "The pristine or saved worker image used at process start.")
+   (core-pathname
+    :initarg :core-pathname
+    :initform nil
+    :reader lisp-worker-core-pathname
+    :type (option pathname)
+    :documentation "The compatible saved core, or NIL for pristine SBCL.")
    (process
     :initform nil
     :accessor lisp-worker-process
@@ -32,12 +51,55 @@
     :initform (make-lock "Autolith Lisp worker")
     :reader lisp-worker-lock
     :documentation "The lock serializing worker protocol requests."))
-  (:documentation "A persistent but disposable, heap-isolated SBCL worker."))
+  (:documentation "One named persistent, heap-isolated SBCL REPL process."))
 
-(-> lisp-worker-create (configuration) lisp-worker)
-(defun lisp-worker-create (configuration)
-  "Create a stopped disposable worker manager for CONFIGURATION."
-  (make-instance 'lisp-worker :configuration configuration))
+(-> lisp-repl-name-p (t) boolean)
+(defun lisp-repl-name-p (value)
+  "Return true when VALUE is safe as one named worker REPL."
+  (and (non-empty-string-p value)
+       (<= (length value) 80)
+       (every (lambda (character)
+                (or (alphanumericp character)
+                    (find character "-_")))
+              value)
+       t))
+
+(-> lisp-repl--validate-name (string) string)
+(defun lisp-repl--validate-name (name)
+  "Return valid REPL NAME or signal WORKER-ERROR."
+  (unless (lisp-repl-name-p name)
+    (error 'worker-error
+           :message
+           (format nil
+                   "Invalid Lisp REPL name ~S. Use 1 to 80 letters, digits, hyphens, or underscores."
+                   name)
+           :tool-name "lisp.repls"))
+  name)
+
+(-> lisp-worker-create
+    (configuration &key (:name string) (:image-identifier string))
+    lisp-worker)
+(defun lisp-worker-create
+    (configuration &key (name "default")
+                        (image-identifier +pristine-lisp-image-identifier+))
+  "Create a stopped named worker based on IMAGE-IDENTIFIER."
+  (lisp-repl--validate-name name)
+  (let ((image
+          (unless (string= image-identifier
+                           +pristine-lisp-image-identifier+)
+            (lisp-image-load configuration image-identifier))))
+    (when (and image (not (lisp-image-compatible-p image)))
+      (error 'lisp-image-error
+             :message (format nil "Lisp image ~A is incompatible with this runtime."
+                              image-identifier)
+             :tool-name "lisp.start"
+             :pathname (lisp-image-manifest-pathname image)
+             :stage ':compatibility))
+    (make-instance 'lisp-worker
+                   :configuration configuration
+                   :name name
+                   :image-identifier image-identifier
+                   :core-pathname (and image (lisp-image-core-pathname image)))))
 
 (-> lisp-worker-running-p (lisp-worker) boolean)
 (defun lisp-worker-running-p (worker)
@@ -62,12 +124,22 @@
                              "bin/autolith-active"
                              (configuration-source-root configuration)))
            (sbcl-command (lisp-worker-sbcl-command))
+           (command
+             (if (lisp-worker-core-pathname worker)
+                 (list sbcl-command
+                       "--core"
+                       (namestring (lisp-worker-core-pathname worker))
+                       "--noinform"
+                       "--no-userinit"
+                       "--no-sysinit"
+                       "--end-runtime-options")
+                 (list sbcl-command
+                       "--script"
+                       (namestring worker-launcher)
+                       "--worker")))
            (process
              (uiop:launch-program
-              (list sbcl-command
-                    "--script"
-                    (namestring worker-launcher)
-                    "--worker")
+              command
               :directory (configuration-working-directory configuration)
               :input :stream
               :output :stream
@@ -76,12 +148,31 @@
       (setf (lisp-worker-process worker) process
             (lisp-worker-input worker) (uiop:process-info-input process)
             (lisp-worker-output worker) (uiop:process-info-output process))
-      (loop for line = (read-line (lisp-worker-output worker) nil nil)
-            do (unless line
-                 (error 'worker-error
-                        :message "The Lisp worker exited before its handshake."
-                        :tool-name "lisp.worker"))
-            until (string= line "(:AUTOLITH-WORKER :VERSION 1)"))))
+      (handler-case
+          (loop for line = (read-line (lisp-worker-output worker) nil nil)
+                do (unless line
+                     (error 'worker-error
+                            :message "The Lisp worker exited before its handshake."
+                            :tool-name "lisp.worker"))
+                   (let* ((*read-eval* nil)
+                          (form (handler-case
+                                    (read-from-string line)
+                                  (error ()
+                                    nil)))
+                          (properties (and (listp form) (rest form))))
+                     (when (eq (first form) :autolith-worker)
+                       (unless (and (= (or (getf properties :version) 0) 2)
+                                    (string=
+                                     (or (getf properties :image) "")
+                                     (lisp-worker-image-identifier worker)))
+                         (error 'worker-error
+                                :message
+                                "The Lisp worker reported the wrong protocol or image identity."
+                                :tool-name "lisp.worker"))
+                       (return))))
+        (error (condition)
+          (lisp-worker-stop worker)
+          (error condition)))))
   worker)
 
 (-> lisp-worker-stop (lisp-worker) null)
@@ -104,9 +195,136 @@
 
 (-> lisp-worker-reset (lisp-worker) lisp-worker)
 (defun lisp-worker-reset (worker)
-  "Discard WORKER's process and start a pristine replacement."
+  "Discard WORKER's process and restart it from the same base image."
   (lisp-worker-stop worker)
   (lisp-worker-start worker))
+
+
+;;;; -- Named Worker Pool --
+
+(defclass lisp-worker-pool ()
+  ((configuration
+    :initarg :configuration
+    :reader lisp-worker-pool-configuration
+    :type configuration
+    :documentation "The paths and runtime shared by every managed REPL.")
+   (workers
+    :initform (make-hash-table :test #'equal)
+    :reader lisp-worker-pool-workers
+    :type hash-table
+    :documentation "Named REPLs mapped to their isolated worker managers.")
+   (lock
+    :initform (make-lock "Autolith Lisp worker pool")
+    :reader lisp-worker-pool-lock
+    :documentation "The lock serializing REPL creation, reset, and removal."))
+  (:documentation "A manager for independent named persistent SBCL REPLs."))
+
+(-> lisp-worker-pool-create (configuration) lisp-worker-pool)
+(defun lisp-worker-pool-create (configuration)
+  "Create an empty named Lisp worker pool for CONFIGURATION."
+  (make-instance 'lisp-worker-pool :configuration configuration))
+
+(-> lisp-worker-pool-start
+    (lisp-worker-pool string (option string))
+    lisp-worker)
+(defun lisp-worker-pool-start (pool name image-identifier)
+  "Start or return NAME, enforcing IMAGE-IDENTIFIER when it is supplied."
+  (lisp-repl--validate-name name)
+  (with-lock-held ((lisp-worker-pool-lock pool))
+    (let ((existing (gethash name (lisp-worker-pool-workers pool))))
+      (when existing
+        (unless (or (null image-identifier)
+                    (string= image-identifier
+                             (lisp-worker-image-identifier existing)))
+          (error 'worker-error
+                 :message
+                 (format nil
+                         "Lisp REPL ~A already uses image ~A; reset it explicitly to switch to ~A."
+                         name
+                         (lisp-worker-image-identifier existing)
+                         image-identifier)
+                 :tool-name "lisp.start"))
+        (return-from lisp-worker-pool-start (lisp-worker-start existing)))
+      (let* ((image-identifier
+               (or image-identifier +pristine-lisp-image-identifier+))
+             (worker
+              (lisp-worker-create
+               (lisp-worker-pool-configuration pool)
+               :name name
+               :image-identifier image-identifier)))
+        (setf (gethash name (lisp-worker-pool-workers pool)) worker)
+        (handler-case
+            (lisp-worker-start worker)
+          (error (condition)
+            (remhash name (lisp-worker-pool-workers pool))
+            (lisp-worker-stop worker)
+            (error condition)))))))
+
+(-> lisp-worker-pool-worker (lisp-worker-pool string) lisp-worker)
+(defun lisp-worker-pool-worker (pool name)
+  "Return NAME, starting it from pristine SBCL when it does not exist."
+  (lisp-worker-pool-start pool name nil))
+
+(-> lisp-worker-pool-stop (lisp-worker-pool string &key (:if-missing keyword)) null)
+(defun lisp-worker-pool-stop (pool name &key (if-missing :error))
+  "Stop and forget named REPL NAME."
+  (lisp-repl--validate-name name)
+  (with-lock-held ((lisp-worker-pool-lock pool))
+    (let ((worker (gethash name (lisp-worker-pool-workers pool))))
+      (cond
+        (worker
+         (lisp-worker-stop worker)
+         (remhash name (lisp-worker-pool-workers pool)))
+        ((eq if-missing :error)
+         (error 'worker-error
+                :message (format nil "No Lisp REPL named ~A exists." name)
+                :tool-name "lisp.stop")))))
+  nil)
+
+(-> lisp-worker-pool-reset (lisp-worker-pool string string) lisp-worker)
+(defun lisp-worker-pool-reset (pool name image-identifier)
+  "Replace named REPL NAME with a fresh process from IMAGE-IDENTIFIER."
+  (lisp-worker-pool-stop pool name :if-missing :ignore)
+  (lisp-worker-pool-start pool name image-identifier))
+
+(-> lisp-worker-pool-stop-all (lisp-worker-pool) null)
+(defun lisp-worker-pool-stop-all (pool)
+  "Stop and forget every REPL managed by POOL."
+  (with-lock-held ((lisp-worker-pool-lock pool))
+    (maphash (lambda (name worker)
+               (declare (ignore name))
+               (lisp-worker-stop worker))
+             (lisp-worker-pool-workers pool))
+    (clrhash (lisp-worker-pool-workers pool)))
+  nil)
+
+(-> lisp-worker-manager-stop (t) null)
+(defun lisp-worker-manager-stop (manager)
+  "Stop every live worker represented by MANAGER."
+  (typecase manager
+    (lisp-worker
+     (lisp-worker-stop manager))
+    (lisp-worker-pool
+     (lisp-worker-pool-stop-all manager)))
+  nil)
+
+(-> lisp-worker-pool-render (lisp-worker-pool) string)
+(defun lisp-worker-pool-render (pool)
+  "Return a concise model-visible list of named REPLs and their images."
+  (let ((workers nil))
+    (with-lock-held ((lisp-worker-pool-lock pool))
+      (maphash (lambda (name worker)
+                 (declare (ignore name))
+                 (push worker workers))
+               (lisp-worker-pool-workers pool)))
+    (if workers
+        (with-output-to-string (stream)
+          (dolist (worker (sort workers #'string< :key #'lisp-worker-name))
+            (format stream "~A  ~A  image ~A~%"
+                    (lisp-worker-name worker)
+                    (if (lisp-worker-running-p worker) "running" "stopped")
+                    (lisp-worker-image-identifier worker))))
+        "No named Lisp REPLs exist.")))
 
 (-> lisp-worker-request (lisp-worker keyword list) list)
 (defun lisp-worker-request (worker operation arguments)
@@ -167,6 +385,31 @@
 
 ;;;; -- Lisp Tool Methods --
 
+(-> lisp-tool-repl-name (hash-table) string)
+(defun lisp-tool-repl-name (arguments)
+  "Return the validated REPL selected by tool ARGUMENTS."
+  (lisp-repl--validate-name
+   (or (tool-argument arguments "repl") "default")))
+
+(-> lisp-tool-worker (tool-context hash-table) lisp-worker)
+(defun lisp-tool-worker (context arguments)
+  "Return the named worker selected by ARGUMENTS inside CONTEXT."
+  (let ((manager (tool-context-worker context))
+        (name (lisp-tool-repl-name arguments)))
+    (typecase manager
+      (lisp-worker-pool
+       (lisp-worker-pool-worker manager name))
+      (lisp-worker
+       (unless (string= name (lisp-worker-name manager))
+         (error 'worker-error
+                :message "This legacy context provides only its default Lisp REPL."
+                :tool-name "lisp.worker"))
+       manager)
+      (otherwise
+       (error 'worker-error
+              :message "No Lisp worker manager is available."
+              :tool-name "lisp.worker")))))
+
 (defmethod tool-execute ((tool lisp-eval-tool)
                          (context tool-context)
                          (arguments hash-table))
@@ -174,7 +417,7 @@
   (declare (ignore tool))
   (worker-response-tool-result
    (lisp-worker-request
-    (tool-context-worker context)
+    (lisp-tool-worker context arguments)
     :eval
     (list :form (tool-argument arguments "form" :required t)))))
 
@@ -185,7 +428,7 @@
   (declare (ignore tool))
   (worker-response-tool-result
    (lisp-worker-request
-    (tool-context-worker context)
+    (lisp-tool-worker context arguments)
     :compile
     (list :form (tool-argument arguments "form" :required t)))))
 
@@ -196,7 +439,7 @@
   (declare (ignore tool))
   (worker-response-tool-result
    (lisp-worker-request
-    (tool-context-worker context)
+    (lisp-tool-worker context arguments)
     :load-system
     (list :system (tool-argument arguments "system" :required t)))))
 
@@ -207,7 +450,7 @@
   (declare (ignore tool))
   (worker-response-tool-result
    (lisp-worker-request
-    (tool-context-worker context)
+    (lisp-tool-worker context arguments)
     :describe
     (list :designator (tool-argument arguments "designator" :required t)))))
 
@@ -218,17 +461,88 @@
   (declare (ignore tool))
   (worker-response-tool-result
    (lisp-worker-request
-    (tool-context-worker context)
+    (lisp-tool-worker context arguments)
     :run-tests
     (list :system (tool-argument arguments "system" :required t)))))
 
 (defmethod tool-execute ((tool lisp-reset-tool)
                          (context tool-context)
                          (arguments hash-table))
-  "Discard CONTEXT's worker and start a pristine replacement."
+  "Reset the named REPL to pristine or an explicitly selected saved image."
+  (declare (ignore tool))
+  (let* ((manager (tool-context-worker context))
+         (name (lisp-tool-repl-name arguments))
+         (image (or (tool-argument arguments "image")
+                    +pristine-lisp-image-identifier+)))
+    (typecase manager
+      (lisp-worker-pool
+       (lisp-worker-pool-reset manager name image))
+      (lisp-worker
+       (unless (and (string= name (lisp-worker-name manager))
+                    (string= image (lisp-worker-image-identifier manager)))
+         (error 'worker-error
+                :message "A legacy Lisp worker cannot switch its name or image."
+                :tool-name "lisp.reset"))
+       (lisp-worker-reset manager))
+      (otherwise
+       (error 'worker-error
+              :message "No Lisp worker manager is available."
+              :tool-name "lisp.reset")))
+    (tool-success
+     (format nil "Lisp REPL ~A was reset from image ~A." name image))))
+
+(defmethod tool-execute ((tool lisp-start-tool)
+                         (context tool-context)
+                         (arguments hash-table))
+  "Start a named REPL from pristine or one compatible saved image."
+  (declare (ignore tool))
+  (let ((manager (tool-context-worker context))
+        (name (lisp-tool-repl-name arguments))
+        (image (or (tool-argument arguments "image")
+                   +pristine-lisp-image-identifier+)))
+    (unless (typep manager 'lisp-worker-pool)
+      (error 'worker-error
+             :message "Named REPL creation requires a Lisp worker pool."
+             :tool-name "lisp.start"))
+    (let ((worker (lisp-worker-pool-start manager name image)))
+      (tool-success
+       (format nil "Lisp REPL ~A is running from image ~A."
+               name
+               (lisp-worker-image-identifier worker))))))
+
+(defmethod tool-execute ((tool lisp-stop-tool)
+                         (context tool-context)
+                         (arguments hash-table))
+  "Stop and forget one named REPL."
+  (declare (ignore tool))
+  (let ((manager (tool-context-worker context))
+        (name (lisp-tool-repl-name arguments)))
+    (unless (typep manager 'lisp-worker-pool)
+      (error 'worker-error
+             :message "Named REPL removal requires a Lisp worker pool."
+             :tool-name "lisp.stop"))
+    (lisp-worker-pool-stop manager name)
+    (tool-success (format nil "Lisp REPL ~A was stopped." name))))
+
+(defmethod tool-execute ((tool lisp-repls-tool)
+                         (context tool-context)
+                         (arguments hash-table))
+  "List every named REPL in CONTEXT's worker pool."
   (declare (ignore tool arguments))
-  (lisp-worker-reset (tool-context-worker context))
-  (tool-success "The disposable Lisp worker was reset."))
+  (let ((manager (tool-context-worker context)))
+    (unless (typep manager 'lisp-worker-pool)
+      (error 'worker-error
+             :message "Named REPL listing requires a Lisp worker pool."
+             :tool-name "lisp.repls"))
+    (tool-success (lisp-worker-pool-render manager))))
+
+(defmethod tool-execute ((tool lisp-images-tool)
+                         (context tool-context)
+                         (arguments hash-table))
+  "List pristine and saved Lisp worker images visible to CONTEXT."
+  (declare (ignore tool arguments))
+  (tool-success
+   (lisp-image-render-inventory (tool-context-configuration context))))
 
 
 ;;;; -- Worker Runtime --
@@ -337,7 +651,9 @@
         (*read-eval* nil)
         (*print-readably* t)
         (*print-circle* t))
-    (prin1 '(:autolith-worker :version 1))
+    (prin1 (list :autolith-worker
+                 :version 2
+                 :image *worker-image-identifier*))
     (terpri)
     (finish-output)
     (loop for request = (read *standard-input* nil :end)

@@ -111,4 +111,59 @@
                         "the launched worker completes its isolated protocol request"))
       (lisp-worker-stop worker)
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (pool (lisp-worker-pool-create configuration)))
+    (unwind-protect
+         (let* ((alpha (lisp-worker-pool-start pool "alpha" "pristine"))
+                (beta (lisp-worker-pool-start pool "beta" "pristine")))
+           (lisp-worker-request alpha :eval '(:form "(defparameter *pool-value* 41)"))
+           (let ((alpha-result
+                   (lisp-worker-request alpha :eval '(:form "(1+ *pool-value*)")))
+                 (beta-result
+                   (lisp-worker-request beta :eval '(:form "(boundp '*pool-value*)"))))
+             (test-assert (equal (getf (rest alpha-result) :values) '("42"))
+                          "one named REPL retains its own heap state")
+             (test-assert (equal (getf (rest beta-result) :values) '("NIL"))
+                          "named REPLs do not share heap state"))
+           (let* ((registry (make-default-tool-registry))
+                  (conversation
+                    (conversation-create configuration :identifier "repl-routing"))
+                  (context (make-instance 'tool-context
+                                          :configuration configuration
+                                          :worker pool
+                                          :conversation conversation))
+                  (result
+                    (tool-execute
+                     (tool-registry-find registry "lisp" "eval")
+                     context
+                     (json-object "form" "(1+ *pool-value*)"
+                                  "repl" "alpha"))))
+             (test-assert (and (tool-result-success-p result)
+                               (search "42" (tool-result-content result)))
+                          "lisp.eval routes requests to the named REPL"))
+           (test-assert (search "alpha  running  image pristine"
+                                (lisp-worker-pool-render pool))
+                        "the worker pool lists each active REPL and image")
+           (handler-case
+               (progn
+                 (lisp-worker-pool-start pool "alpha" "another-image")
+                 (test-assert nil
+                              "an existing REPL never switches images implicitly"))
+             (worker-error ()
+               (test-assert t
+                            "an existing REPL never switches images implicitly")))
+           (lisp-worker-pool-reset pool "alpha" "pristine")
+           (let ((result
+                   (lisp-worker-request
+                    (lisp-worker-pool-worker pool "alpha")
+                    :eval
+                    '(:form "(boundp '*pool-value*)"))))
+             (test-assert (equal (getf (rest result) :values) '("NIL"))
+                          "reset replaces only the selected REPL heap"))
+           (lisp-worker-pool-stop pool "beta")
+           (test-assert (not (search "beta" (lisp-worker-pool-render pool)))
+                        "stopping one REPL leaves it out of the pool"))
+      (lisp-worker-pool-stop-all pool)
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

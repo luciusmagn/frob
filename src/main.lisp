@@ -254,7 +254,7 @@
       (when input-controller
         (application-input-controller-stop input-controller))
       (when worker
-        (lisp-worker-stop worker))))
+        (lisp-worker-manager-stop worker))))
   nil)
 
 ;;;; -- Command-Line Entry --

@@ -628,15 +628,24 @@
 (-> checkpoint--detach-worker (t) null)
 (defun checkpoint--detach-worker (worker)
   "Detach SAVER's inherited worker streams without signaling the live subprocess."
-  (when (typep worker 'lisp-worker)
-    (dolist (stream (list (lisp-worker-input worker)
-                          (lisp-worker-output worker)))
-      (when (and stream (open-stream-p stream))
-        (ignore-errors (close stream))))
-    (setf (lisp-worker-process worker) nil
-          (lisp-worker-input worker) nil
-          (lisp-worker-output worker) nil
-          (lisp-worker-next-request-id worker) 1))
+  (labels ((detach-one (repl)
+             "Detach one REPL's inherited descriptors in the saver process."
+             (dolist (stream (list (lisp-worker-input repl)
+                                   (lisp-worker-output repl)))
+               (when (and stream (open-stream-p stream))
+                 (ignore-errors (close stream))))
+             (setf (lisp-worker-process repl) nil
+                   (lisp-worker-input repl) nil
+                   (lisp-worker-output repl) nil
+                   (lisp-worker-next-request-id repl) 1)))
+    (typecase worker
+      (lisp-worker
+       (detach-one worker))
+      (lisp-worker-pool
+       (maphash (lambda (name repl)
+                  (declare (ignore name))
+                  (detach-one repl))
+                (lisp-worker-pool-workers worker)))))
   nil)
 
 (-> checkpoint-resume-main () null)

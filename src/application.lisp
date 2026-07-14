@@ -26,8 +26,8 @@
    (worker
     :initarg :worker
     :accessor application-worker
-    :type (option lisp-worker)
-    :documentation "The reconnectable disposable Lisp worker.")
+    :type t
+    :documentation "The reconnectable pool of named Lisp REPL workers.")
    (agent
     :initarg :agent
     :accessor application-agent
@@ -171,7 +171,7 @@
                            (conversation-create configuration)))
          (provider (provider-create configuration))
          (registry (make-default-tool-registry))
-         (worker (lisp-worker-create configuration))
+         (worker (lisp-worker-pool-create configuration))
          (agent (agent-create :configuration configuration
                               :provider provider
                               :conversation conversation
@@ -220,7 +220,7 @@
              (t
               (conversation-create configuration))))
          (provider (provider-create configuration))
-         (worker (lisp-worker-create configuration))
+         (worker (lisp-worker-pool-create configuration))
          (registry (application-tool-registry application))
          (agent (agent-create :configuration configuration
                               :provider provider
