@@ -226,6 +226,41 @@
                      (permissions-load-warning-cause condition))))
   (:documentation "Malformed command permissions were ignored to fail closed."))
 
+(define-condition later-error (autolith-error)
+  ((pathname
+    :initarg :pathname
+    :reader later-error-pathname
+    :type pathname
+    :documentation "The deferred-input state file being read or written.")
+   (operation
+    :initarg :operation
+    :reader later-error-operation
+    :type keyword
+    :documentation "The deferred-input operation that failed.")
+   (cause
+    :initarg :cause
+    :reader later-error-cause
+    :type t
+    :documentation "The underlying persistence failure, when available."))
+  (:documentation "Deferred inputs could not be validated, read, or persisted."))
+
+(define-condition later-load-warning (warning)
+  ((pathname
+    :initarg :pathname
+    :reader later-load-warning-pathname
+    :type pathname
+    :documentation "The malformed deferred-input pathname.")
+   (cause
+    :initarg :cause
+    :reader later-load-warning-cause
+    :type later-error
+    :documentation "The structured deferred-input read failure."))
+  (:report (lambda (condition stream)
+             (format stream "Ignoring deferred inputs at ~A: ~A"
+                     (later-load-warning-pathname condition)
+                     (later-load-warning-cause condition))))
+  (:documentation "Malformed deferred-input state was ignored during startup."))
+
 (define-condition conversation-error (autolith-error)
   ((pathname
     :initarg :pathname

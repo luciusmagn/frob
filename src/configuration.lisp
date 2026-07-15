@@ -390,6 +390,11 @@ Selecting a different model recomputes the context window for that model."
   "Return the atomic persistent command-permission pathname."
   (merge-pathnames "permissions.sexp" (configuration-state-root configuration)))
 
+(-> configuration-later-path (configuration) pathname)
+(defun configuration-later-path (configuration)
+  "Return the atomic deferred-input queue pathname."
+  (merge-pathnames "later.sexp" (configuration-state-root configuration)))
+
 (-> configuration-auth-path (configuration) pathname)
 (defun configuration-auth-path (configuration)
   "Return Autolith's private OAuth credential pathname."
