@@ -24,6 +24,7 @@
                 #:line-editor-set-text
                 #:line-editor-clear
                 #:line-editor-handle-event
+                #:line-editor-move-vertical
                 #:line-editor-create
                 #:selector
                 #:make-selector

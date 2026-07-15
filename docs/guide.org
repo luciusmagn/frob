@@ -118,7 +118,9 @@ emphasis. Set =NO_COLOR= to disable styling entirely.
 
 Enter submits the complete input. Alt-Enter inserts a newline. Shift-Enter also
 inserts a newline when the terminal reports modified keys with CSI-u or
-modifyOtherKeys sequences.
+modifyOtherKeys sequences. Up and Down preserve the preferred terminal cell
+column across explicit and wrapped input rows, falling back to history only at
+the first or last visual row.
 
 The prompt remains editable while Autolith streams a response or runs tools.
 Enter queues another message behind the active turn, and the live region shows

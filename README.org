@@ -73,8 +73,9 @@ nix run .#
 #+END_SRC
 
 Enter submits, Alt-Enter inserts a newline, and Ctrl-C clears a draft or exits
-from an empty prompt. Tab and Shift-Tab cycle command suggestions. Messages can
-be drafted and queued while AL is responding. Type =/help= for commands.
+from an empty prompt. Up and Down move across visual input rows before falling
+back to history. Tab and Shift-Tab cycle command suggestions. Messages can be
+drafted and queued while AL is responding. Type =/help= for commands.
 
 * Repository map
 

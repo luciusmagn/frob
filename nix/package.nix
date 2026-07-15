@@ -11,8 +11,8 @@ let
     src = pkgs.fetchFromGitHub {
       owner = "luciusmagn";
       repo = "clinedi";
-      rev = "a5d7d519b413bde2e046e1c049b750c62502ca8b";
-      hash = "sha256-nRGK2ZDi6cDUrjCy3rGZtWLBytZhFCkCjY0Po60GVmg=";
+      rev = "04a383c12b975c759746cae1abe7a08b57e0b066";
+      hash = "sha256-5aF7VjbhsmeAwteC3Yjqs6uC8dXKArlvnC1unCs00Cg=";
     };
   };
 

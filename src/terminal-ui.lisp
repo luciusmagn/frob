@@ -287,10 +287,10 @@
         (return (values nil nil)))
       (unless (or (terminal-ui-completion-active-p ui)
                   (member event
-                          '(:history-previous :history-next
+                          '(:up :down :history-previous :history-next
                             :complete :complete-previous :submit)))
         (return (values nil nil)))
-      (when (member event '(:history-previous :history-next
+      (when (member event '(:up :down :history-previous :history-next
                             :complete :complete-previous))
         (terminal-ui--begin-completion ui))
       (multiple-value-bind (selector-action entry)
@@ -906,6 +906,26 @@ when no resize needs to be applied."
       ((eq event :complete)
        (line-editor-handle-event editor '(:insert "    "))
        (values :changed nil))
+      ((member event '(:up :down))
+       (let* ((terminal (terminal-ui-terminal ui))
+              (prompt-width
+                (text-cell-width
+                 (sanitize-text (terminal-ui-prompt ui)
+                                :single-line-p t)))
+              (direction (if (eq event :up) -1 1)))
+         (if (line-editor-move-vertical
+              editor direction
+              :columns (terminal-columns terminal)
+              :prompt-width prompt-width)
+             (values :changed nil)
+             (multiple-value-bind (action payload)
+                 (line-editor-handle-event
+                  editor
+                  (if (eq event :up)
+                      ':history-previous
+                      ':history-next))
+               (values (if (eq action :continue) ':changed action)
+                       payload)))))
       ((eq event :queue-submit)
        (multiple-value-bind (action payload)
            (line-editor-handle-event editor :submit)

@@ -40,5 +40,5 @@
   :version "ql-2025-06-22"))
 ("clinedi" .
  (:class qlot/source/git:source-git
-  :initargs (:remote-url "https://github.com/luciusmagn/clinedi.git" :ref "a75341e758317df580e6dd1f392a4a392153f57e")
-  :version "git-a75341e758317df580e6dd1f392a4a392153f57e"))
+  :initargs (:remote-url "https://github.com/luciusmagn/clinedi.git" :ref "04a383c12b975c759746cae1abe7a08b57e0b066")
+  :version "git-04a383c12b975c759746cae1abe7a08b57e0b066"))
