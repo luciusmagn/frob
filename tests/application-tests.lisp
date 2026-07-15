@@ -630,19 +630,19 @@
                                  (not (search "changes" text)))
                             "fs.edit identifies its path and scope without a redundant label")
                (test-assert
-                (and (find (terminal-span :dim "  10 10 │ before")
+                (and (find (terminal-span :dim "  10 │ before")
                            entry
                            :test #'equal)
-                     (find (terminal-span :failure "- 11    │ old value")
+                     (find (terminal-span :failure "- 11 │ old value")
                            entry
                            :test #'equal)
-                     (find (terminal-span :success "+    11 │ new value")
+                     (find (terminal-span :success "+ 11 │ new value")
                            entry
                            :test #'equal)
-                     (find (terminal-span :dim "  12 12 │ after")
+                     (find (terminal-span :dim "  12 │ after")
                            entry
                            :test #'equal))
-                "fs.edit colors removed and added lines with file line numbers")))
+                "fs.edit uses one numbered gutter for all diff lines")))
         (uiop:delete-directory-tree root
                                     :validate t
                                     :if-does-not-exist :ignore)))

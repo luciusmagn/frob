@@ -291,11 +291,10 @@
 
 (-> application--edit-line-row
     (keyword string &key (:width integer)
-                         (:old-line (option integer))
-                         (:new-line (option integer)))
+                         (:line-number (option integer)))
     list)
 (defun application--edit-line-row
-    (kind text &key (width 1) old-line new-line)
+    (kind text &key (width 1) line-number)
   "Return one numbered context, removed, or added diff row."
   (let ((style (ecase kind
                  (:context ':dim)
@@ -308,10 +307,9 @@
     (list
      (terminal-span
       style
-      (format nil "~A ~A ~A │ ~A"
+      (format nil "~A ~A │ ~A"
               marker
-              (application--edit-line-number-cell old-line width)
-              (application--edit-line-number-cell new-line width)
+              (application--edit-line-number-cell line-number width)
               text)))))
 
 (-> application--edit-change-rows
@@ -332,8 +330,7 @@
                     kind
                     (aref lines index)
                     :width width
-                    :old-line (and (eq kind ':removed) line-number)
-                    :new-line (and (eq kind ':added) line-number)))
+                    :line-number line-number))
      (when (plusp omitted)
        (let ((line-number (and start-line (+ start-line visible-count))))
          (list
@@ -341,8 +338,7 @@
            kind
            (format nil "… +~D more ~A line~:P" omitted noun)
            :width width
-           :old-line (and (eq kind ':removed) line-number)
-           :new-line (and (eq kind ':added) line-number))))))))
+           :line-number line-number)))))))
 
 (-> application--edit-diff-rows
     (string string &key (:old-start-line (option integer))
@@ -382,10 +378,10 @@
                ':context
                (aref old-lines (1- prefix-length))
                :width width
-               :old-line (and old-start-line
-                              (+ old-start-line prefix-length -1))
-               :new-line (and new-start-line
-                              (+ new-start-line prefix-length -1)))))
+               :line-number (or (and new-start-line
+                                     (+ new-start-line prefix-length -1))
+                                (and old-start-line
+                                     (+ old-start-line prefix-length -1))))))
            (application--edit-change-rows
             removed
             ':removed
@@ -404,12 +400,13 @@
                ':context
                (aref old-lines (- (length old-lines) suffix-length))
                :width width
-               :old-line (and old-start-line
-                              (+ old-start-line
-                                 (- (length old-lines) suffix-length)))
-               :new-line (and new-start-line
-                              (+ new-start-line
-                                 (- (length new-lines) suffix-length)))))))))))
+               :line-number
+               (or (and new-start-line
+                        (+ new-start-line
+                           (- (length new-lines) suffix-length)))
+                   (and old-start-line
+                        (+ old-start-line
+                           (- (length old-lines) suffix-length))))))))))))
 
 (-> application--edit-file-hunks
     (application string string &key (:new-text string) (:replace-all boolean))
