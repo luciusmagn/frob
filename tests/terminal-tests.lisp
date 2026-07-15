@@ -402,7 +402,23 @@
       (recording-terminal-reset terminal)
       (terminal-ui-set-status active-ui "working")
       (test-assert (search "∙ " (recording-terminal-output terminal))
-                   "the status row carries its activity glyph")
+                   "the status row carries its activity separator")
+      (multiple-value-bind (text display cursor)
+          (terminal-ui--live-content
+           active-ui
+           (terminal-ui-status-started-at active-ui))
+        (declare (ignore display cursor))
+        (test-assert (char= (char text 0) #\Newline)
+                     "an empty row appears above the status row")
+        (test-assert (search "READ  ∙ working · 00:00" text)
+                     "the status row starts with its fixed-width REPL spinner")
+        (test-assert
+         (equal (terminal-ui--status-spinner-spans-at
+                 active-ui
+                 (terminal-ui-status-started-at active-ui))
+                (list (terminal-span ':plain "R")
+                      (terminal-span ':dim "EAD ")))
+         "the spinner dims every character except its cycling highlight"))
       (recording-terminal-reset terminal)
       (terminal-ui-append-finalized
        active-ui
@@ -550,7 +566,7 @@
 
 (-> test-terminal-timed-status () null)
 (defun test-terminal-timed-status ()
-  "Test elapsed activity, stale progress timing, and repaint rate limiting."
+  "Test status animation, elapsed activity, and stale progress timing."
   (let* ((clock 0)
          (clock-calls 0)
          (terminal (make-instance 'recording-terminal :columns 60))
@@ -566,17 +582,25 @@
       (multiple-value-bind (text display cursor)
           (terminal-ui--live-content active-ui)
         (declare (ignore display cursor))
-        (test-assert (search "working · 00:00" text)
-                     "live activity starts with an explicit elapsed clock"))
-      (setf clock 0.9)
+        (test-assert (search "READ  ∙ working · 00:00" text)
+                     "live activity starts with its spinner and elapsed clock"))
+      (setf clock 0.24)
       (test-assert (not (terminal-ui-refresh-status active-ui))
-                   "subsecond clock changes do not repaint activity")
-      (setf clock 1)
+                   "time within one spinner frame does not repaint activity")
+      (setf clock 0.25)
       (let ((calls-before-refresh clock-calls))
         (test-assert (terminal-ui-refresh-status active-ui)
-                     "a new elapsed second repaints activity")
+                     "a new spinner frame repaints activity")
         (test-assert (= clock-calls (1+ calls-before-refresh))
                      "one timestamp drives both status signature and paint"))
+      (multiple-value-bind (text display cursor)
+          (terminal-ui--live-content active-ui clock)
+        (declare (ignore display cursor))
+        (test-assert (search "EVAL  ∙ working · 00:00" text)
+                     "the spinner advances without shifting the activity text"))
+      (setf clock 1)
+      (test-assert (terminal-ui-refresh-status active-ui)
+                   "a new elapsed second repaints activity")
       (setf clock 29)
       (terminal-ui-note-status-progress active-ui)
       (terminal-ui-refresh-status active-ui)

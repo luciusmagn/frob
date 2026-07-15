@@ -10,6 +10,9 @@
 (define-constant +terminal-ui-stale-status-seconds+ 30
   :documentation "The idle duration after which live activity is labelled as stale.")
 
+(define-constant +terminal-ui-status-spinner-frames-per-second+ 4
+  :documentation "The number of REPL status spinner frames painted each second.")
+
 (define-constant +terminal-ui-pending-preview-limit+ 3
   :documentation "The maximum pending inputs previewed for each delivery class.")
 
@@ -398,13 +401,44 @@
             (format nil "~2,'0D:~2,'0D"
                     remaining-minutes remaining-seconds))))))
 
+(-> terminal-ui--status-spinner-phase-at
+    (terminal-ui real)
+    (integer 0 3))
+(defun terminal-ui--status-spinner-phase-at (ui now)
+  "Return UI's quarter-second REPL status spinner phase at NOW."
+  (let ((started-at (or (terminal-ui-status-started-at ui) now)))
+    (mod (floor (* +terminal-ui-status-spinner-frames-per-second+
+                   (max 0 (- now started-at))))
+         4)))
+
+(-> terminal-ui--status-spinner-spans-at (terminal-ui real) list)
+(defun terminal-ui--status-spinner-spans-at (ui now)
+  "Return UI's fixed-width READ/EVAL/PRINT/LOOP spinner spans at NOW."
+  (multiple-value-bind (text bright-index)
+      (ecase (terminal-ui--status-spinner-phase-at ui now)
+        (0 (values "READ " 0))
+        (1 (values "EVAL " 1))
+        (2 (values "PRINT" 2))
+        (3 (values "LOOP " 3)))
+    (remove nil
+            (list (and (plusp bright-index)
+                       (terminal-span ':dim
+                                      (subseq text 0 bright-index)))
+                  (terminal-span ':plain
+                                 (subseq text bright-index
+                                         (1+ bright-index)))
+                  (and (< (1+ bright-index) (length text))
+                       (terminal-span ':dim
+                                      (subseq text (1+ bright-index))))))))
+
 (-> terminal-ui--status-signature-at (terminal-ui real) list)
 (defun terminal-ui--status-signature-at (ui now)
-  "Return the visible elapsed values identifying UI's status paint at NOW."
+  "Return the visible values identifying UI's status paint at NOW."
   (multiple-value-bind (elapsed idle)
       (terminal-ui--status-times-at ui now)
     (list elapsed
-          (and (>= idle +terminal-ui-stale-status-seconds+) idle))))
+          (and (>= idle +terminal-ui-stale-status-seconds+) idle)
+          (terminal-ui--status-spinner-phase-at ui now))))
 
 (-> terminal-ui--status-text-at (terminal-ui real) string)
 (defun terminal-ui--status-text-at (ui now)
@@ -483,11 +517,14 @@
       (setf rows
             (append rows
                     (list
+                     nil
                      (terminal--clip-spans
-                      (list (terminal-span ':brand "∙ ")
-                            (terminal-span ':dim
-                                           (terminal-ui--status-text-at
-                                            ui status-now)))
+                      (append
+                       (terminal-ui--status-spinner-spans-at ui status-now)
+                       (list (terminal-span ':brand " ∙ ")
+                             (terminal-span ':dim
+                                            (terminal-ui--status-text-at
+                                             ui status-now))))
                       row-width)))))
     (let ((steering-inputs (terminal-ui-steering-input-previews ui)))
       (when steering-inputs
