@@ -14,6 +14,13 @@ The release service has two independent long-running processes:
   container with Rust 1.97.1, verifies the archive checksum, and publishes the
   two artifacts by one atomic directory rename.
 
+Inside the container, Common Lisp coordinates dependency setup, repository
+checks, and archive construction. Building the pinned SBCL runtime also moves
+into Lisp immediately after a small shell boundary downloads and installs the
+first bootstrap compiler. The installer, service entrypoints, and initial
+bootstrap remain shell because they must run before a Lisp image is available
+or replace the current Unix process.
+
 The HTTP process runs as the unprivileged =autolith-release= user. It can read
 the tracked checkout and published artifacts but cannot write them. The builder
 runs separately with Docker access and never handles public requests. Docker

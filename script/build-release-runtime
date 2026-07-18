@@ -7,15 +7,10 @@ source_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
 installation=${1:?usage: build-release-runtime INSTALLATION}
 bootstrap_version=2.4.0
 bootstrap_sha256=50afb9765d6a2f937f609ac33ebe553326347aef23eddd49c46d76456a5b3095
-runtime_version=$(tr -d '[:space:]' < "$source_root/sbcl.version")
-runtime_sha256=$(tr -d '[:space:]' < "$source_root/sbcl-source.sha256")
 temporary_root=$(mktemp -d)
-
-fail()
-{
-  printf 'Autolith release runtime build failed: %s\n' "$1" >&2
-  exit 1
-}
+bootstrap_archive=$temporary_root/sbcl-$bootstrap_version-x86-64-linux-binary.tar.bz2
+bootstrap_source=$temporary_root/sbcl-$bootstrap_version-x86-64-linux
+bootstrap_installation=$temporary_root/bootstrap
 
 cleanup()
 {
@@ -25,61 +20,20 @@ cleanup()
 
 trap cleanup EXIT HUP INT TERM
 
-for command in curl make readlink sha256sum tar; do
-  command -v -- "$command" >/dev/null 2>&1 || fail "$command is required."
-done
-[[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] ||
-  fail "release runtimes currently support Linux x86-64 only."
-[[ $runtime_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
-  fail "sbcl.version is malformed."
-[[ $runtime_sha256 =~ ^[0-9a-f]{64}$ ]] ||
-  fail "sbcl-source.sha256 is malformed."
-
-bootstrap_archive=$temporary_root/sbcl-$bootstrap_version-x86-64-linux-binary.tar.bz2
-bootstrap_source=$temporary_root/sbcl-$bootstrap_version-x86-64-linux
-bootstrap_installation=$temporary_root/bootstrap
-runtime_archive=$temporary_root/sbcl-$runtime_version-source.tar.bz2
-runtime_source=$temporary_root/sbcl-$runtime_version
-
 printf 'Installing the pinned SBCL %s bootstrap compiler.\n' "$bootstrap_version"
 curl --fail --location --show-error --retry 3 \
   --proto '=https' --tlsv1.2 \
   --output "$bootstrap_archive" \
   "https://downloads.sourceforge.net/project/sbcl/sbcl/$bootstrap_version/sbcl-$bootstrap_version-x86-64-linux-binary.tar.bz2"
 printf '%s  %s\n' "$bootstrap_sha256" "$bootstrap_archive" |
-  sha256sum --check --status || fail "the bootstrap archive checksum is invalid."
+  sha256sum --check --status
 tar -xjf "$bootstrap_archive" -C "$temporary_root"
 (
   cd "$bootstrap_source"
   env -u SBCL_HOME sh install.sh --prefix="$bootstrap_installation"
 )
-actual_bootstrap_version=$(
-  env -u SBCL_HOME "$bootstrap_installation/bin/sbcl" \
-    --noinform --no-userinit --no-sysinit --non-interactive \
-    --eval '(write-string (lisp-implementation-version))'
-)
-[[ $actual_bootstrap_version == "$bootstrap_version" ]] ||
-  fail "the bootstrap compiler reports $actual_bootstrap_version."
 
-printf 'Building the pinned SBCL %s release runtime.\n' "$runtime_version"
-curl --fail --location --show-error --retry 3 \
-  --proto '=https' --tlsv1.2 \
-  --output "$runtime_archive" \
-  "https://downloads.sourceforge.net/project/sbcl/sbcl/$runtime_version/sbcl-$runtime_version-source.tar.bz2"
-printf '%s  %s\n' "$runtime_sha256" "$runtime_archive" |
-  sha256sum --check --status || fail "the runtime source checksum is invalid."
-tar -xjf "$runtime_archive" -C "$temporary_root"
-(
-  cd "$runtime_source"
-  sh make.sh \
-    --prefix="$installation" \
-    --xc-host="$bootstrap_installation/bin/sbcl --no-userinit --no-sysinit"
-  env -u SBCL_HOME sh install.sh --prefix="$installation"
-)
-actual_runtime_version=$(
-  env -u SBCL_HOME "$installation/bin/sbcl" \
-    --noinform --no-userinit --no-sysinit --non-interactive \
-    --eval '(write-string (lisp-implementation-version))'
-)
-[[ $actual_runtime_version == "$runtime_version" ]] ||
-  fail "the release runtime reports $actual_runtime_version."
+env -u SBCL_HOME "$bootstrap_installation/bin/sbcl" \
+  --noinform --no-userinit --no-sysinit \
+  --script "$source_root/script/build-release-runtime.lisp" \
+  "$source_root" "$installation" "$temporary_root" "$bootstrap_installation"
