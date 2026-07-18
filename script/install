@@ -2,8 +2,8 @@
 
 set -eu
 
-repository=luciusmagn/autolith
-release_base_url=${AUTOLITH_RELEASE_BASE_URL:-https://github.com/$repository/releases/download}
+release_base_url=${AUTOLITH_RELEASE_BASE_URL:-https://sh.lambda-symbolics.com/releases}
+release_latest_url=${AUTOLITH_RELEASE_LATEST_URL:-$release_base_url/latest}
 home=${HOME:-}
 data_home=${XDG_DATA_HOME:-$home/.local/share}
 install_root=${AUTOLITH_INSTALL_ROOT:-$data_home/autolith/installation}
@@ -34,7 +34,7 @@ release_latest_tag()
 {
   effective_url=$(curl --fail --silent --show-error --location \
     --max-time 10 --output /dev/null --write-out '%{url_effective}' \
-    "https://github.com/$repository/releases/latest") || return 1
+    "$release_latest_url") || return 1
   latest_tag=${effective_url##*/}
   release_tag_valid_p "$latest_tag" || return 1
   printf '%s\n' "$latest_tag"

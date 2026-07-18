@@ -82,15 +82,24 @@ printf '%s\n' \
   '#!/bin/sh' \
   'set -eu' \
   'output=' \
+  'write_out=' \
   'url=' \
   'while [ "$#" -gt 0 ]; do' \
   '  case $1 in' \
   '    --output) output=$2; shift 2 ;;' \
-  '    --retry|--proto|--max-time|--write-out) shift 2 ;;' \
+  '    --write-out) write_out=$2; shift 2 ;;' \
+  '    --retry|--proto|--max-time) shift 2 ;;' \
   '    --*) shift ;;' \
   '    *) url=$1; shift ;;' \
   '  esac' \
   'done' \
+  'case $url in' \
+  '  */latest)' \
+  '    [ -n "$write_out" ]' \
+  '    printf "%s" https://example.invalid/releases/v0.11.0' \
+  '    exit 0' \
+  '    ;;' \
+  'esac' \
   'cp "$AUTOLITH_TEST_RELEASE_FIXTURE/${url##*/}" "$output"' \
   > "$fixture_bin/curl"
 chmod +x "$fixture_bin/curl"
@@ -110,5 +119,12 @@ AUTOLITH_RELEASE_BASE_URL=https://example.invalid \
 AUTOLITH_INSTALL_ROOT=$install_root \
 AUTOLITH_BIN_DIR=$bin_directory \
   "$source_root/script/install" --version v0.11.0 >/dev/null
+PATH="$fixture_bin:$PATH" \
+AUTOLITH_TEST_RELEASE_FIXTURE=$fixture_root \
+AUTOLITH_RELEASE_BASE_URL=https://example.invalid/releases \
+AUTOLITH_RELEASE_LATEST_URL=https://example.invalid/releases/latest \
+AUTOLITH_INSTALL_ROOT=$install_root \
+AUTOLITH_BIN_DIR=$bin_directory \
+  "$source_root/script/install" >/dev/null
 
 printf 'Autolith release launcher checks passed.\n'

@@ -3,6 +3,7 @@
 set -euo pipefail
 
 installer_url=${AUTOLITH_INSTALLER_URL:-https://sh.lambda-symbolics.com/autolith}
+release_latest_url=${AUTOLITH_RELEASE_LATEST_URL:-https://sh.lambda-symbolics.com/releases/latest}
 update_interval=${AUTOLITH_UPDATE_INTERVAL_SECONDS:-86400}
 launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
 release_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
@@ -65,7 +66,7 @@ release_latest_tag()
 
   effective_url=$(curl --fail --silent --show-error --location \
     --max-time 5 --output /dev/null --write-out '%{url_effective}' \
-    https://github.com/luciusmagn/autolith/releases/latest) || return 1
+    "$release_latest_url") || return 1
   tag=${effective_url##*/}
   release_tag_valid_p "$tag" || return 1
   printf '%s\n' "$tag"
