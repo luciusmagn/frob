@@ -4,9 +4,9 @@
   :version "0.11.1"
   :serial t
   :depends-on (#:alexandria
-               #:cffi
                #:cl-base64
                #:cl-exec-sandbox
+               #:clifff
                #:clinedi
                #:closer-mop
                #:dexador

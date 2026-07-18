@@ -10,3 +10,4 @@ ql yason 2026-01-01
 
 git clinedi https://github.com/luciusmagn/clinedi.git :ref 760cf8ac47b72dee36dc121bc09f8fb5ffa5dc2b
 git cl-exec-sandbox https://github.com/luciusmagn/cl-exec-sandbox.git :ref 8c47a1dadb64eba1629742ef6b43789ed7d73b36
+git clifff https://github.com/luciusmagn/clifff.git :ref a57058ba3ffd222af57513e412a1d01508b4d1b3

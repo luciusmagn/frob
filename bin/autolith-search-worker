@@ -21,6 +21,5 @@
       (error "Autolith search needs Quicklisp at ~A" quicklisp-setup))
     (load quicklisp-setup)
     (uiop:symbol-call '#:ql '#:quickload :cffi :silent t)
-    (asdf:load-asd (merge-pathnames "autolith.asd" source-root))
-    (asdf:load-system :autolith))
-  (uiop:symbol-call '#:autolith '#:search-worker-main protocol-output))
+    (asdf:load-system :clifff))
+  (uiop:symbol-call '#:clifff '#:worker-main protocol-output))

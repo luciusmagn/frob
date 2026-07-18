@@ -11,18 +11,17 @@
                 #:sandbox-result-output
                 #:sandbox-result-timed-out-p
                 #:workspace-write-sandbox-policy)
-  (:import-from #:cffi
-                #:defcstruct
-                #:defcfun
-                #:foreign-slot-value
-                #:foreign-string-to-lisp
-                #:foreign-type-size
-                #:load-foreign-library
-                #:mem-aref
-                #:null-pointer
-                #:null-pointer-p
-                #:with-foreign-object
-                #:with-foreign-string)
+  (:import-from #:clifff
+                #:clifff-error
+                #:clifff-error-cause
+                #:clifff-error-operation
+                #:clifff-error-pathname
+                #:make-worker
+                #:worker
+                #:worker-close
+                #:worker-detach
+                #:worker-process
+                #:worker-request)
   (:import-from #:clinedi
                 #:line-editor
                 #:line-editor-text
@@ -87,7 +86,6 @@
   (:export #:main
            #:release-server-main
            #:run-tests
-           #:search-worker-main
            #:worker-main))
 
 (in-package #:autolith)

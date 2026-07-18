@@ -119,7 +119,7 @@
      '("command"))))
   registry)
 
-(-> default-tools--register-search (tool-registry search-worker) tool-registry)
+(-> default-tools--register-search (tool-registry worker) tool-registry)
 (defun default-tools--register-search (registry worker)
   "Register indexed workspace search tools using WORKER in REGISTRY."
   (dolist
@@ -587,7 +587,7 @@
 (defun make-default-tool-registry (&key immutable-p)
   "Create Autolith's tool registry, omitting mutable self tools when requested."
   (let ((registry (make-instance 'tool-registry))
-        (search-worker (make-instance 'search-worker)))
+        (search-worker (search-worker-create)))
     (default-tools--register-workspace registry)
     (default-tools--register-search registry search-worker)
     (default-tools--register-shell registry)

@@ -114,22 +114,25 @@ replacement of the complete registry definition in the live image.
 
 ** =search-tools.lisp= and =search-worker.lisp=
 
-=search-tools.lisp= owns the CFFI binding, workspace-aware index, and bounded
-result rendering. =search-worker.lisp= owns the parent-side lifecycle, readable
-private protocol, one-process retry, and the =search.*= dispatch methods. One
-registry shares one worker across fuzzy path, glob, content, and multi-pattern
-search; the helper process owns the single native fff engine. The Rust library
-is built from pinned fff commit
+=search-tools.lisp= owns the pinned native-library identity, tool classes, and
+argument policy. =search-worker.lisp= adapts Autolith configuration and tool
+results to =clifff=. The pinned =clifff= dependency owns the CFFI binding,
+workspace index, readable result data, bounded presentation, supervised helper
+protocol, process retry, and rebuildable database reset. One registry shares
+one worker across fuzzy path, glob, content, and multi-pattern search; the
+helper process owns the single native fff engine. The Rust library is built from
+pinned fff commit
 =44a5b259570730a4236ecbf06673d43ef7b2263e= and published privately under the
 Autolith data root. It is neither a command subprocess nor a program installed
 on the user's =PATH=. This integration was reviewed against that exact upstream
 commit's generated C header and Rust implementation.
 
 The helper owns all native watcher threads, caches, database handles, and fff
-pointers. A failed exchange closes it, discards only rebuildable ranking state,
-and retries once in a fresh process. Checkpoint entry and normal application
-exit close the helper, so the active image never saves or inherits a native fff
-pointer. A resumed application starts a fresh helper on its next search.
+pointers. A dead process or failed exchange closes it, discards only rebuildable
+ranking state, and retries once in a fresh process. Checkpoint entry and normal
+application exit close the helper, so the active image never saves or inherits
+a native fff pointer. A resumed application starts a fresh helper on its next
+search.
 
 ** =lisp-worker.lisp=
 

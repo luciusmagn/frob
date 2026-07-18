@@ -43,7 +43,7 @@
 
 (-> test-search-tools () null)
 (defun test-search-tools ()
-  "Exercise the private fff ABI and all four indexed workspace operations."
+  "Exercise the clifff adapter and all four indexed workspace operations."
   (let* ((default-configuration
            (configuration-create
             :source-root (asdf:system-source-directory :autolith)
@@ -90,10 +90,6 @@
                   (content-tool (tool-registry-find registry "search" "content"))
                   (multi-tool
                     (tool-registry-find registry "search" "multi-content")))
-             (test-assert (= (foreign-type-size '(:struct fff-result)) 32)
-                          "the fff result envelope matches the x86-64 C ABI")
-             (test-assert (= (foreign-type-size '(:struct fff-create-options)) 88)
-                          "the fff create options match version 2 of the C ABI")
              (test-assert (and files-tool glob-tool content-tool multi-tool)
                           "all native search tools are registered")
              (test-assert
@@ -105,7 +101,7 @@
                                                "query" "model selection")))
                (test-assert (tool-result-success-p result)
                             (format nil
-                                    "search.files completes through the fff C ABI: ~A"
+                                    "search.files completes through clifff: ~A"
                                     (tool-result-content result)))
                (test-assert (search "src/model-selection.lisp"
                                     (tool-result-content result))
@@ -146,9 +142,9 @@
                                          (tool-result-content result))
                                  (not (search "docs/search-guide.org"
                                               (tool-result-content result))))
-                            "search.multi-content honors separate file constraints"))
+             "search.multi-content honors separate file constraints"))
              (let* ((worker (search-tool-engine files-tool))
-                    (failed-process (search-worker-process worker))
+                    (failed-process (worker-process worker))
                     (failed-pid (uiop:process-info-pid failed-process))
                     (frecency-marker
                       (merge-pathnames "fff/frecency/test-marker"
@@ -162,25 +158,22 @@
                (loop repeat 100
                      while (uiop:process-alive-p failed-process)
                      do (sleep 0.01))
-               (search-worker--reset-databases configuration)
-               (test-assert
-                (and (not (probe-file frecency-marker))
-                     (not (probe-file history-marker))
-                     (probe-file (search-worker--log-path configuration)))
-                "fff database reset preserves the private diagnostic log")
                (let ((result (search-tests--call registry context
                                                  "search" "files"
                                                  "query" "model selection")))
                  (test-assert
                   (and (tool-result-success-p result)
-                       (uiop:process-alive-p (search-worker-process worker))
+                       (not (probe-file frecency-marker))
+                       (not (probe-file history-marker))
+                       (probe-file (search-worker--log-path configuration))
+                       (uiop:process-alive-p (worker-process worker))
                        (/= failed-pid
                            (uiop:process-info-pid
-                            (search-worker-process worker))))
-                  "a killed native helper is restarted without killing Autolith")))
+                            (worker-process worker))))
+                  "a killed helper resets its databases and restarts without killing Autolith")))
              (tool-registry-close-search-state registry)
              (test-assert
-              (null (search-worker-process (search-tool-engine files-tool)))
+              (null (worker-process (search-tool-engine files-tool)))
               "closing a registry stops and clears its isolated watcher")))
       (when registry
         (ignore-errors (tool-registry-close-search-state registry)))

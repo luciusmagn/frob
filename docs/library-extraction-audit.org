@@ -19,18 +19,21 @@ tests its own invariants, and leaves a small Autolith adapter.
 
 Natural home: =luciusmagn/clifff=.
 
+Status: implemented and integrated at
+=a57058ba3ffd222af57513e412a1d01508b4d1b3=.
+
 The fff CFFI binding, native index lifecycle, result decoding, content search,
 and restartable helper process are general-purpose facilities. Autolith should
 retain only tool schemas, workspace configuration, argument validation, and
 conversion into Autolith tool results and conditions.
 
-Current source boundary:
+The remaining Autolith adapter is:
 
 - =src/search-tools.lisp=
 - =src/search-worker.lisp=
-- Native fff build and manifest support used by those files
+- Native fff build and manifest identity used by those files
 
-Expected net Autolith reduction: 850 to 1,050 source lines.
+Realized net Autolith reduction: 965 source lines across the two search files.
 
 ** =sexp-store=
 

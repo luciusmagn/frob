@@ -46,3 +46,7 @@
  (:class qlot/source/git:source-git
   :initargs (:remote-url "https://github.com/luciusmagn/cl-exec-sandbox.git" :ref "8c47a1dadb64eba1629742ef6b43789ed7d73b36")
   :version "git-8c47a1dadb64eba1629742ef6b43789ed7d73b36"))
+("clifff" .
+ (:class qlot/source/git:source-git
+  :initargs (:remote-url "https://github.com/luciusmagn/clifff.git" :ref "a57058ba3ffd222af57513e412a1d01508b4d1b3")
+  :version "git-a57058ba3ffd222af57513e412a1d01508b4d1b3"))
