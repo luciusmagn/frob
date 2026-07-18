@@ -863,13 +863,16 @@
                    configuration
                    script-pathname
                    identifier)
-          (let ((history-commit
-                  (image-history-commit
-                   configuration
-                   :identifier identifier
-                   :title title
-                   :manifest-pathname manifest-pathname
-                   :script-pathname script-pathname)))
+          (let* ((history-commit
+                   (image-history-commit
+                    configuration
+                    :identifier identifier
+                    :title title
+                    :manifest-pathname manifest-pathname
+                    :script-pathname script-pathname))
+                 (commit
+                   (image-commit-load configuration identifier
+                                      :history-commit history-commit)))
             (image-commit--write-form-atomically
              (configuration-current-image-commit-path configuration)
              (list :current-image-commit
@@ -882,8 +885,7 @@
             (dolist (mutation-record mutation-records)
               (remhash (getf (rest mutation-record) :id)
                        *exploratory-undo-actions*))
-            (image-commit-load configuration identifier
-                               :history-commit history-commit)))
+            commit))
       (image-commit-error (condition)
         (when (probe-file directory)
           (uiop:delete-directory-tree directory
