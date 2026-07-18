@@ -20,6 +20,8 @@ bash -n "$source_root/script/build-release"
 bash -n "$source_root/script/build-release-runtime"
 bash -n "$source_root/server/build-in-container"
 test -r "$source_root/server/Containerfile"
+grep -F 'RUSTUP_TOOLCHAIN=1.97.1' \
+  "$source_root/server/Containerfile" >/dev/null
 sh -n "$source_root/script/install"
 mkdir -p "$release_root/bin" \
   "$release_root/libexec/autolith/.qlot" \
