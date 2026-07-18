@@ -238,6 +238,7 @@
 (defgeneric terminal-read-event (terminal)
   (:documentation "Read and return one semantic input event from TERMINAL."))
 
+(-> terminal-input-ready-p (terminal) boolean)
 (defgeneric terminal-input-ready-p (terminal)
   (:documentation "Return true when TERMINAL can read an event without blocking."))
 
