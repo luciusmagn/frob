@@ -66,6 +66,9 @@ image, and preloaded active-image manifests. Realized net Autolith reduction:
 
 Natural home: =luciusmagn/sbcl-workers=.
 
+Status: implemented and integrated at
+=fff2bc4bbeb8eec93a963c5ad1f7af85bbf7a6a3=.
+
 Named persistent SBCL subprocesses, the readable request protocol, evaluation
 and compilation operations, source lookup, working-directory changes, worker
 pool lifecycle, forked core saving, immutable image manifests, and runtime
@@ -75,12 +78,14 @@ The library must describe process isolation as a reliability boundary, not a
 security sandbox. Autolith should retain =lisp.*= tool definitions, tool
 argument handling, configuration adaptation, and prompt inventory rendering.
 
-Current source boundary:
+The remaining Autolith adapter is:
 
 - =src/lisp-worker.lisp=
 - =src/lisp-images.lisp=
 
-Expected net Autolith reduction: 1,000 to 1,250 source lines.
+It retains tool schemas and results, configuration conversion, Autolith
+condition translation, and model-facing image inventory rendering. Realized
+net Autolith reduction: 874 source lines across the two worker files.
 
 * Later Candidate
 
@@ -122,12 +127,15 @@ Each extraction must satisfy all of the following:
 6. Autolith source inspection gains a way to inspect relevant ASDF dependency
    source before moving code needed for live diagnosis or repair.
 
-* Recommended Sequence
+* Completed Sequence
 
 1. Implement =clifff= and replace Autolith's private binding and helper.
 2. Implement =sexp-store= and consolidate snapshot and append-log mechanics.
 3. Implement =sbcl-workers= and replace the in-tree worker runtime and image
    machinery.
+
+* Remaining Sequence
+
 4. Extend =self.source= to inspect pinned dependency source where required.
 5. Move the remaining general terminal presentation into Clinedi in separate
    vertical changes.
