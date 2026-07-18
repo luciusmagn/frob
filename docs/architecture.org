@@ -24,7 +24,9 @@ terminal-ui
     |
     +---------> tool registry
                     |
-                    +-------------> fff search index and native watcher
+                    +-------------> isolated search worker
+                    |                    |
+                    |                    +-----> fff index and native watcher
                     |
                     +-------------> named lisp-worker pool
                     |                    |
@@ -43,6 +45,13 @@ sequences, source editing, or subprocess protocols.
 
 Defines immutable runtime choices and paths. Configuration contains credential
 locations, never credential values.
+
+** =readable-state.lisp=
+
+Owns strict one-form reading and atomic private S-expression snapshots shared by
+preferences, command permissions, deferred work, and workspace agendas. Readers
+disable =*read-eval*=, reject trailing forms, and never expose a half-published
+replacement.
 
 ** =authentication.lisp=
 
@@ -97,22 +106,30 @@ terminal rendering logic.
 Defines tool metadata, namespaces, validation, dispatch, and output. Every
 tool call receives a matching result, including malformed and failed calls.
 
-** =search-tools.lisp=
+** =default-tools.lisp=
 
-Owns the in-process CFFI binding to fff, the lazy workspace-aware search index,
-bounded result rendering, and the =search.*= tools. One registry shares one
-engine across fuzzy path, glob, content, and multi-pattern search. The Rust
-library is built from pinned fff commit
+Composes the default registry from one focused registration function per
+namespace. This keeps a schema or tool-set change local instead of requiring a
+replacement of the complete registry definition in the live image.
+
+** =search-tools.lisp= and =search-worker.lisp=
+
+=search-tools.lisp= owns the CFFI binding, workspace-aware index, and bounded
+result rendering. =search-worker.lisp= owns the parent-side lifecycle, readable
+private protocol, one-process retry, and the =search.*= dispatch methods. One
+registry shares one worker across fuzzy path, glob, content, and multi-pattern
+search; the helper process owns the single native fff engine. The Rust library
+is built from pinned fff commit
 =44a5b259570730a4236ecbf06673d43ef7b2263e= and published privately under the
 Autolith data root. It is neither a command subprocess nor a program installed
 on the user's =PATH=. This integration was reviewed against that exact upstream
 commit's generated C header and Rust implementation.
 
-The fff instance owns native watcher threads, caches, and database handles.
-Checkpoint entry destroys the instance before the first fork. The saver child
-also detaches any inherited pointer as a defensive invariant, and a resumed
-application constructs a fresh instance on its next search. Normal application
-exit destroys the instance after input and worker shutdown.
+The helper owns all native watcher threads, caches, database handles, and fff
+pointers. A failed exchange closes it, discards only rebuildable ranking state,
+and retries once in a fresh process. Checkpoint entry and normal application
+exit close the helper, so the active image never saves or inherits a native fff
+pointer. A resumed application starts a fresh helper on its next search.
 
 ** =lisp-worker.lisp=
 
