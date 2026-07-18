@@ -723,14 +723,15 @@
             (fff--free-grep-result payload)))))))
 
 (-> search-engine-search-multi-content
-    (search-engine configuration list string
-     &key (:file-offset integer) (:maximum-results integer)
+    (search-engine configuration list
+     &key (:constraints string)
+          (:file-offset integer) (:maximum-results integer)
      (:maximum-matches-per-file integer) (:time-budget-milliseconds integer)
      (:context-lines integer))
     string)
 (defun search-engine-search-multi-content
-    (engine configuration patterns constraints
-     &key file-offset maximum-results maximum-matches-per-file
+    (engine configuration patterns
+     &key constraints file-offset maximum-results maximum-matches-per-file
        time-budget-milliseconds context-lines)
   "Search ENGINE for lines matching any literal PATTERNS under CONSTRAINTS."
   (with-lock-held ((search-engine-lock engine))

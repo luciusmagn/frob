@@ -492,5 +492,5 @@
       (search-tool-engine tool)
       (tool-context-configuration context)
       :operation ':multi-content
-      :arguments (append (list patterns constraints)
+      :arguments (append (list patterns :constraints constraints)
                          (search-tool--common-content-options arguments))))))
