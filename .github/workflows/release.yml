@@ -30,11 +30,30 @@ jobs:
       - name: Build the pinned SBCL runtime
         shell: bash
         run: |
+          bootstrap_version=2.4.0
+          bootstrap_sha256=83d8b74f08d2254c59b9790bc1f669e09099457b884720ececbf45f4b46d1776
+          bootstrap_archive="/tmp/sbcl-$bootstrap_version-source.tar.bz2"
+          bootstrap_source="/tmp/sbcl-$bootstrap_version"
+          bootstrap_installation="/tmp/sbcl-bootstrap-$bootstrap_version"
           runtime_version=$(tr -d '[:space:]' < sbcl.version)
           runtime_root="$HOME/.local/share/autolith/runtimes/$runtime_version"
           runtime_installation="$runtime_root/installation"
           archive="/tmp/sbcl-$runtime_version-source.tar.bz2"
           source="/tmp/sbcl-$runtime_version"
+          curl --fail --location --show-error --retry 3 \
+            --proto '=https' --tlsv1.2 \
+            --output "$bootstrap_archive" \
+            "https://downloads.sourceforge.net/project/sbcl/sbcl/$bootstrap_version/sbcl-$bootstrap_version-source.tar.bz2"
+          printf '%s  %s\n' "$bootstrap_sha256" "$bootstrap_archive" |
+            sha256sum --check --status
+          tar -xjf "$bootstrap_archive" -C /tmp
+          cd "$bootstrap_source"
+          sh make.sh --prefix="$bootstrap_installation"
+          env -u SBCL_HOME sh install.sh --prefix="$bootstrap_installation"
+          test "$("$bootstrap_installation/bin/sbcl" \
+            --noinform --no-userinit --no-sysinit --non-interactive \
+            --eval '(write-string (lisp-implementation-version))')" = \
+            "$bootstrap_version"
           curl --fail --location --show-error --retry 3 \
             --proto '=https' --tlsv1.2 \
             --output "$archive" \
@@ -43,7 +62,9 @@ jobs:
             sha256sum --check --status
           tar -xjf "$archive" -C /tmp
           cd "$source"
-          sh make.sh --prefix="$runtime_installation"
+          sh make.sh \
+            --prefix="$runtime_installation" \
+            --xc-host="$bootstrap_installation/bin/sbcl --no-userinit --no-sysinit"
           env -u SBCL_HOME sh install.sh --prefix="$runtime_installation"
           test "$("$runtime_installation/bin/sbcl" \
             --noinform --no-userinit --no-sysinit --non-interactive \
