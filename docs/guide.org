@@ -105,10 +105,10 @@ autolith
 #+END_SRC
 
 Use =autolith --immutable= when the active image should expose only
-=self.inspect=, =self.source=, =self.diff=, and =self.generations=. The flag
-removes evaluation, mutation, persistence, checkpoint, and rollback tools from
-the provider schema. It does not turn filesystem, shell, or worker operations
-into a security sandbox.
+=self.inspect=, =self.source=, =self.status=, =self.diff=, and
+=self.generations=. The flag removes evaluation, mutation, persistence,
+checkpoint, and rollback tools from the provider schema. It does not turn
+filesystem, shell, or worker operations into a security sandbox.
 
 The interface stays on the primary screen. Completed transcript rows are emitted
 once and remain in ordinary terminal scrollback. Only the bounded live region,
@@ -399,20 +399,26 @@ only when starting or resetting a REPL. The virtual =pristine= image cannot be
 overwritten.
 
 The =self.*= tools inspect bindings, read tracked definitions or matching SBCL
-source, evaluate, redefine, set, persist complete Autolith definitions, show
-pending live mutations, privately commit them, checkpoint, list generations,
-and request immediate rollback. =self.redefine= accepts an explicit active package, temporarily
-unlocks a locked implementation package while reading and installing the form,
-restores the lock, and journals the canonical package. =self.commit= preserves
-that package in its replay entry, allowing an SBCL Lisp-level definition to be
-reconstructed without changing the runtime executable.
+source, summarize active mutation and recovery state, evaluate, redefine, set,
+exercise or discard pending changes, persist complete Autolith definitions,
+show effective live changes, privately commit them, checkpoint, list
+generations, and request immediate rollback. =self.redefine= accepts an explicit
+active package, temporarily unlocks a locked implementation package while
+reading and installing the form, restores the lock, and journals the canonical
+package. =self.commit= preserves that package in its replay entry, allowing an
+SBCL Lisp-level definition to be reconstructed without changing the runtime
+executable.
 
 Durable self-modifications never patch the tracked repository. =self.redefine=
 and =self.set= journal successful reconstructible changes in the active image;
-=self.diff= shows the changes still pending in that image lineage. =self.commit=
-checks all pending changes and writes an immutable full snapshot under
+=self.diff= coalesces repeated edits and shows the effective changes still
+pending in that image lineage. =self.exercise= journals a focused pass or
+failure against one mutation, while =self.discard= restores its exact preceding
+live state. =self.commit= checks all pending changes and writes an immutable full
+snapshot under
 =${XDG_DATA_HOME:-~/.local/share}/autolith/image-commits/COMMIT-ID/=. Each snapshot
-contains =manifest.sexp= and executable =reconstruct.lisp=. Autolith copies those
+contains =manifest.sexp= and executable =reconstruct.lisp=. Before selection,
+Autolith loads the script in a clean pinned source process. It then copies the
 artifacts into a separate Git repository under
 =${XDG_STATE_HOME:-~/.local/state}/autolith/mutation-history/= and commits them
 using the private commit title. The atomic selection record is

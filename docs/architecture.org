@@ -140,16 +140,24 @@ private image commits across the narrow post-publication crash window.
 
 ** =image-commits.lisp=
 
-Owns stable exploratory mutation identities, branch lineages, =self.diff=,
-=self.commit=, private commit manifests, and complete Lisp replay scripts. Each
-commit is a full effective snapshot under the data root. The snapshot is also a
-real commit in the separate mutation-history Git repository under the state
+Owns stable exploratory mutation identities, branch lineages, effective
+=self.diff= state, =self.commit=, private commit manifests, complete Lisp replay
+scripts, and the clean-process replay probe. Each commit is a full effective
+snapshot under the data root. The snapshot is replay-probed before selection and
+then committed to the separate mutation-history Git repository under the state
 root. An atomic pointer binds both identities and selects normal startup state.
 Startup restores deleted canonical manifest and replay files from the exact Git
 object. Retained cores preserve their checkpointed identities and begin a new
 lineage on reconnect, so rollback cannot absorb mutations written later by
 another branch. Legacy overlays are loaded at the base and imported into the
 first private commit.
+
+** =self-status.lisp=, =self-discard.lisp=, and =self-exercise.lisp=
+
+Expose concise mutation and recovery state, exact reversible discard of one
+effective exploratory mutation, and focused append-only exercise evidence.
+These operations use the mutation identity, lineage, and replay primitives
+without changing the tracked source repository.
 
 ** =terminal.lisp=
 

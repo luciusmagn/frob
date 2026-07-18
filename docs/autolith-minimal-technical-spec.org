@@ -195,10 +195,14 @@ changes and ordinary experimental heap state.
 Initial operations should include:
 
 - =self.inspect=
+- =self.source=
 - =self.eval=
 - =self.redefine=
 - =self.set=
 - =self.persist-definition=
+- =self.status=
+- =self.discard=
+- =self.exercise=
 - =self.diff=
 - =self.commit=
 - =self.checkpoint=
@@ -209,11 +213,12 @@ The exact tool set may remain small. General operations should be
 composed from ordinary Lisp wherever practical.
 
 Starting with =--immutable= omits =self.eval=, =self.redefine=, =self.set=,
-=self.persist-definition=, =self.commit=, =self.checkpoint=, and =self.rollback=
-from both dispatch and the provider schema. Inspection through =self.inspect=,
-=self.source=, =self.diff=, and =self.generations= remains available. The system
-prompt must describe the reduced capability accurately. Recovery preserves the
-flag, while a later launch without it restores the normal tool registry.
+=self.persist-definition=, =self.discard=, =self.exercise=, =self.commit=,
+=self.checkpoint=, and =self.rollback= from both dispatch and the provider
+schema. Inspection through =self.inspect=, =self.source=, =self.status=,
+=self.diff=, and =self.generations= remains available. The system prompt must
+describe the reduced capability accurately. Recovery preserves the flag, while
+a later launch without it restores the normal tool registry.
 
 ** 5.3 =memory.*=
 
@@ -291,9 +296,13 @@ There are two levels of change.
 An exploratory =self.redefine= or =self.set= change modifies the active
 image and appends a stable mutation identity to the journal.
 
-It may be tested, reverted, refined, or discarded without immediately
-changing durable reconstruction state. =self.diff= shows successful
-reconstructible changes that remain pending in the current image lineage.
+It may be tested, reverted, refined, or discarded without immediately changing
+durable reconstruction state. =self.status= summarizes running, selected,
+pending, and retained state. =self.exercise= records a focused pass or failure
+against one effective mutation. =self.discard= restores the exact preceding live
+state and removes one effective mutation from the pending set. =self.diff=
+coalesces repeated revisions of a target and shows only effective changes from
+the selected private image. The append-only journal retains the raw history.
 
 ** 6.2 Durable Change
 
@@ -304,17 +313,21 @@ A durable change normally follows this sequence:
 3. Run relevant checks.
 4. Persist the complete effective mutation state as an immutable private
    image commit under the data root.
-5. Commit the snapshot to Autolith's private mutation-history Git repository.
-6. Mark the journal entry as durable.
+5. Load the complete replay script in a clean pinned Autolith process.
+6. Commit the snapshot to Autolith's private mutation-history Git repository.
+7. Atomically select the private image and its exact Git commit.
+8. Mark the journal entry as durable.
 
 Each private image commit has a manifest and a complete executable Lisp
 replay script. An atomic pointer under the state root selects the commit
 loaded after the tracked system at normal startup and records the exact private
-Git commit retaining its artifacts. =self.commit= checks and persists all
-pending =self.redefine= and =self.set= mutations in the current image lineage.
-=self.persist-definition= performs the complete transaction for one definition.
-Both tools create commits only in Autolith's private mutation-history repository;
-neither tool writes or commits a workspace repository.
+Git commit retaining its artifacts. =self.commit= checks all pending
+=self.redefine= and =self.set= mutations in the current image lineage and
+persists their coalesced effective state. It rejects a pending stack that returns
+exactly to its baseline. =self.persist-definition= performs the complete
+transaction for one definition. Both tools create commits only in Autolith's
+private mutation-history repository; neither tool writes or commits a workspace
+repository.
 
 Persisted definitions are complete Lisp forms rather than blind textual
 patches.

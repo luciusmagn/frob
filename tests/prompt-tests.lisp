@@ -55,8 +55,15 @@
      (and (search "Treat live self-modification as a routine way" prompt)
           (search "a repeated workaround" prompt)
           (search "never turn the user's task into open-ended self-improvement"
-                  prompt))
+                  prompt)
+          (search "Self-modification never expands your authority" prompt))
      "the system prompt gives bounded positive triggers for self-improvement")
+    (test-assert
+     (and (search "Prototype workspace Lisp, uncertain techniques" prompt)
+          (search "Redefining a macro or compiler macro" prompt)
+          (search "Inspect self.diff before checkpointing" prompt)
+          (search "report whether the change remains exploratory" prompt))
+     "the system prompt explains the useful live-mutation workflow")
     (test-assert (search "memory namespace persists useful facts" prompt)
                  "the system prompt explains persistent memory policy")
     (test-assert
