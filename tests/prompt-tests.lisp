@@ -42,6 +42,10 @@
     (test-assert (search "Autolith may be shortened to AL." prompt)
                  "the system prompt introduces Autolith's short name")
     (test-assert
+     (and (search "short durable workspace plan" prompt)
+          (search "do not mirror every tool call" prompt))
+     "the system prompt reserves agenda for durable workspace state")
+    (test-assert
      (and (search "started with --immutable" immutable-prompt)
           (search "self namespace is inspection-only" immutable-prompt)
           (search "Use self.status" immutable-prompt)
