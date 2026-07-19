@@ -88,6 +88,11 @@
                   prompt))
      "the system prompt prefers available Lisp tooling over Python scripts")
     (test-assert
+     (and (search "the work is not complete until relevant checks pass" prompt)
+          (search "stage only files belonging to the task" prompt)
+          (search "Do not push commits" prompt))
+     "the system prompt completes repository changes with a scoped commit")
+    (test-assert
      (search "request-local related-memory notice" prompt)
      "the system prompt explains request-local ranked memory recall")
     (test-assert (search "Current workspace agenda: empty" prompt)
