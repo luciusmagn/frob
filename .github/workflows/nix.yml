@@ -1,0 +1,59 @@
+name: Nix
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check flake
+        run: nix flake check --no-update-lock-file --print-build-logs
+
+      - name: Build package
+        run: nix build .#autolith --no-update-lock-file --print-build-logs
+
+      - name: Smoke-test first run
+        shell: bash
+        run: |
+          set -euo pipefail
+          temporary_home=$(mktemp -d)
+          export HOME="$temporary_home/home"
+          export XDG_CONFIG_HOME="$temporary_home/config"
+          export XDG_DATA_HOME="$temporary_home/data"
+          export XDG_STATE_HOME="$temporary_home/state"
+
+          status=0
+          timeout 600s ./result/bin/autolith </dev/null \
+            >"$temporary_home/stdout" \
+            2>"$temporary_home/stderr" || status=$?
+
+          cat "$temporary_home/stderr"
+          cat "$temporary_home/stdout"
+          test "$status" -eq 0
+          test -f "$XDG_DATA_HOME/autolith/recovery/autolith-recovery.core"
+          test -f "$XDG_DATA_HOME/autolith/recovery/manifest.sexp"
+          test -f "$XDG_DATA_HOME/autolith/active/autolith-active.core"
+          test -f "$XDG_DATA_HOME/autolith/active/manifest.sexp"
+          grep -F "Installed pristine recovery image" "$temporary_home/stdout"
+          grep -F "Installed preloaded active image" "$temporary_home/stdout"
+          grep -F "AUTOLITH v" "$temporary_home/stdout"
