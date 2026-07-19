@@ -163,6 +163,14 @@ limits before use. Portable conversation records contain image descriptors,
 not inline binary or base64 data. Immutable private artifacts remain under the
 data root and are reconstructed into request-local data URLs during replay.
 
+The read-only =fs.view-image= tool provides the other half of local image
+support. It accepts an absolute or workspace-relative image pathname, validates
+and privately preserves the image through the same preparation pipeline, and
+returns native =input_image= content inside its correlated function-call output.
+This lets the model inspect images created or discovered during a turn without
+using OCR or lossy text approximations. Its durable conversation record retains
+only a portable artifact descriptor and reconstructs the image output on replay.
+
 Credentials are stored outside:
 
 - Saved Lisp cores.

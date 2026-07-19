@@ -476,6 +476,7 @@
            call-id
            :tool-name tool-name
            :output (tool-result-content result)
+           :image-attachments (tool-result-image-attachments result)
            :success-p (tool-result-success-p result)
            :cpu-microseconds cpu-microseconds
            :real-microseconds real-microseconds)

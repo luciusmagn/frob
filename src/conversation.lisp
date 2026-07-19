@@ -270,13 +270,18 @@
          :wire-json (json-encode item)))
   (conversation--append-input-item conversation item))
 
-(-> function-call-output-item (string string) json-object)
+(-> function-call-output-item (string (or string vector)) json-object)
 (defun function-call-output-item (call-id output)
   "Return a Responses API function-call output correlated by CALL-ID."
   (json-object
    "type" "function_call_output"
    "call_id" call-id
    "output" output))
+
+(-> conversation--image-tool-output (list) vector)
+(defun conversation--image-tool-output (attachments)
+  "Return ATTACHMENTS as native image content for a tool output."
+  (coerce (mapcar #'image-input-content-item attachments) 'vector))
 
 (define-constant +conversation-interrupted-tool-output+
   "Autolith restarted before recording this tool call's result. The call may have changed external state. Inspect the relevant state before deciding whether to retry it."
@@ -288,35 +293,65 @@
     (conversation string
      &key (:tool-name string)
           (:output string)
+          (:image-attachments list)
           (:success-p boolean)
           (:cpu-microseconds (option (integer 0)))
           (:real-microseconds (option (integer 0))))
     json-object)
 (defun conversation-append-tool-result
     (conversation call-id
-     &key tool-name output success-p cpu-microseconds real-microseconds)
-  "Persist and append one tool OUTPUT with optional CPU and real timing."
-  (unless (or (and (null cpu-microseconds) (null real-microseconds))
-              (and (typep cpu-microseconds '(integer 0))
-                   (typep real-microseconds '(integer 0))))
-    (error 'conversation-invariant-error
-           :message "Tool timing must contain both nonnegative microsecond values."
-           :pathname (conversation-pathname conversation)
-           :sequence (conversation-next-sequence conversation)))
-  (let ((item (function-call-output-item call-id output)))
-    (conversation-append-record
-     conversation
-     (append
-      (list :tool-result
-            :call-id call-id
-            :tool tool-name
-            :status (if success-p :ok :error)
-            :output output)
-      (when cpu-microseconds
-        (list :cpu-microseconds cpu-microseconds
-              :real-microseconds real-microseconds))
-      (list :wire-json (json-encode item))))
-    (conversation--append-input-item conversation item)))
+     &key tool-name output image-attachments success-p
+       cpu-microseconds real-microseconds)
+  "Persist and append one tool OUTPUT, optional images, and optional timing."
+  (let ((durable-p nil))
+    (unwind-protect
+         (progn
+           (unless (or (and (null cpu-microseconds)
+                            (null real-microseconds))
+                       (and (typep cpu-microseconds '(integer 0))
+                            (typep real-microseconds '(integer 0))))
+             (error 'conversation-invariant-error
+                    :message
+                    "Tool timing must contain both nonnegative microsecond values."
+                    :pathname (conversation-pathname conversation)
+                    :sequence (conversation-next-sequence conversation)))
+           (unless (every (lambda (attachment)
+                            (typep attachment 'image-attachment))
+                          image-attachments)
+             (error 'conversation-invariant-error
+                    :message "Tool image output contains an invalid attachment."
+                    :pathname (conversation-pathname conversation)
+                    :sequence (conversation-next-sequence conversation)))
+           (when (and image-attachments (not success-p))
+             (error 'conversation-invariant-error
+                    :message "A failed tool result cannot contain image output."
+                    :pathname (conversation-pathname conversation)
+                    :sequence (conversation-next-sequence conversation)))
+           (let* ((wire-output
+                    (if image-attachments
+                        (conversation--image-tool-output image-attachments)
+                        output))
+                  (item (function-call-output-item call-id wire-output)))
+             (conversation-append-record
+              conversation
+              (append
+               (list :tool-result
+                     :call-id call-id
+                     :tool tool-name
+                     :status (if success-p :ok :error)
+                     :output output)
+               (when image-attachments
+                 (list :images
+                       (mapcar #'image-attachment-record image-attachments)))
+               (when cpu-microseconds
+                 (list :cpu-microseconds cpu-microseconds
+                       :real-microseconds real-microseconds))
+               (unless image-attachments
+                 (list :wire-json (json-encode item)))))
+             (setf durable-p t)
+             (conversation--append-input-item conversation item)))
+      (unless durable-p
+        (conversation--delete-image-attachments image-attachments)))))
 
 (-> conversation--wire-item-type-p (json-object string) boolean)
 (defun conversation--wire-item-type-p (item type)
@@ -574,6 +609,26 @@ it described the uncompacted context."
         (conversation--append-input-item
          conversation
          (user-message-item content attachments))))
+    (when (and (eq (first record) :tool-result)
+               (getf (rest record) :images))
+      (let* ((call-id (getf (rest record) :call-id))
+             (attachments
+               (mapcar
+                (lambda (descriptor)
+                  (image-attachment-from-record
+                   descriptor
+                   (conversation-image-artifact-root conversation)))
+                (getf (rest record) :images))))
+        (unless (non-empty-string-p call-id)
+          (error 'conversation-invariant-error
+                 :message "A persisted image tool result has no call identifier."
+                 :pathname (conversation-pathname conversation)
+                 :sequence sequence))
+        (conversation--append-input-item
+         conversation
+         (function-call-output-item
+          call-id
+          (conversation--image-tool-output attachments)))))
     (when (and (member (first record)
                        '(:message :provider-item :tool-result))
                (stringp wire-json)

@@ -22,14 +22,16 @@
                                "arguments" "{}"))
                 (result (tool-registry-execute-call
                          registry unknown-call context)))
-           (test-assert (= (length (tool-registry-tools registry)) 45)
+           (test-assert (= (length (tool-registry-tools registry)) 46)
                         "the default registry exposes the complete initial tool set")
            (test-assert (= (length schemas) 7)
                         "the provider schemas contain seven namespaces")
            (test-assert (string= (json-get (aref schemas 0) "name") "fs")
                         "the workspace filesystem namespace is first")
-           (test-assert (= (length (json-get (aref schemas 0) "tools")) 4)
-                        "the fs namespace exposes four workspace operations")
+           (test-assert (= (length (json-get (aref schemas 0) "tools")) 5)
+                        "the fs namespace exposes five workspace operations")
+           (test-assert (tool-registry-find registry "fs" "view-image")
+                        "native local image inspection has a filesystem tool")
            (test-assert (string= (json-get (aref schemas 1) "name") "search")
                         "indexed workspace search follows file access")
            (test-assert (= (length (json-get (aref schemas 1) "tools")) 4)
@@ -61,7 +63,7 @@
                   (immutable-schemas
                     (tool-registry-provider-schemas immutable-registry))
                   (self-schema (aref immutable-schemas 6)))
-             (test-assert (= (length (tool-registry-tools immutable-registry)) 36)
+             (test-assert (= (length (tool-registry-tools immutable-registry)) 37)
                           "immutable mode omits nine active-image state tools")
              (test-assert (= (length (json-get self-schema "tools")) 5)
                           "immutable mode advertises five self inspection tools")
@@ -141,6 +143,20 @@
                             "fs.list marks subdirectories")
                (test-assert (search "sample.txt" (tool-result-content result))
                             "fs.list shows files with their sizes"))
+             (let* ((image-path (merge-pathnames "tool-image.png" root))
+                    (image (test-conversation--write-tiny-png image-path))
+                    (result (run "fs" "view-image"
+                                 "path" (namestring image)))
+                    (attachments (tool-result-image-attachments result)))
+               (test-assert
+                (and (tool-result-success-p result)
+                     (= (length attachments) 1)
+                     (probe-file
+                      (image-attachment-pathname (first attachments))))
+                "fs.view-image validates and privately preserves a local image")
+               (test-assert
+                (search "1x1, image/png" (tool-result-content result))
+                "fs.view-image reports the prepared image metadata"))
              (let ((result (run "shell" "run"
                                 "command" "echo autolith-shell-works && exit 3")))
                (test-assert (tool-result-success-p result)

@@ -64,6 +64,15 @@
                          "How many lines to return; default 400."))
           '("path")))
         (list
+         'fs-view-image-tool
+         "fs" "view-image"
+         "View a local image file when visual inspection is needed. The image is returned directly to the model."
+         (tool-object-schema
+          (json-object
+           "path" (tool-string-property
+                   "The image path, absolute or workspace-relative."))
+          '("path")))
+        (list
          'fs-list-tool
          "fs" "list"
          "List one workspace directory's entries with kinds and byte sizes."

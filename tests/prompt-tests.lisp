@@ -76,6 +76,10 @@
              prompt)
      "the system prompt explains command authorization")
     (test-assert
+     (and (search "Use fs.view-image whenever a local image" prompt)
+          (search "Do not substitute OCR or an ASCII approximation" prompt))
+     "the system prompt directs visual inspection through native image input")
+    (test-assert
      (search "writes limited to the workspace and temporary directories" prompt)
      "the system prompt explains the ordinary command sandbox boundary")
     (test-assert

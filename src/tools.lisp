@@ -282,6 +282,13 @@
     :reader tool-result-content
     :type string
     :documentation "The bounded model-visible result.")
+   (image-attachments
+    :initarg :image-attachments
+    :initform nil
+    :reader tool-result-image-attachments
+    :type list
+    :documentation
+    "Provider-visible local images returned by a successful tool operation.")
    (success-p
     :initarg :success-p
     :reader tool-result-success-p
@@ -289,11 +296,18 @@
     :documentation "True when the tool operation succeeded."))
   (:documentation "The model-visible outcome of exactly one tool call."))
 
-(-> tool-success (t) tool-result)
-(defun tool-success (content)
-  "Return a successful bounded tool result containing CONTENT."
+(-> tool-success (t &key (:image-attachments list)) tool-result)
+(defun tool-success (content &key image-attachments)
+  "Return a successful bounded tool result with CONTENT and optional images."
+  (unless (every (lambda (attachment)
+                   (typep attachment 'image-attachment))
+                 image-attachments)
+    (error 'tool-error
+           :message "Tool image results must contain image attachments."
+           :tool-name "unknown"))
   (make-instance 'tool-result
                  :content (bounded-string content)
+                 :image-attachments (copy-list image-attachments)
                  :success-p t))
 
 (-> tool-failure (t) tool-result)

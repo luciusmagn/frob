@@ -652,6 +652,14 @@
             (image-attachment-mime-type attachment)
             (usb8-array-to-base64-string bytes))))
 
+(-> image-input-content-item (image-attachment) json-object)
+(defun image-input-content-item (attachment)
+  "Return ATTACHMENT as one Codex-compatible provider image item."
+  (json-object
+   "type" "input_image"
+   "image_url" (image-input--data-url attachment)
+   "detail" "high"))
+
 (-> image-input-content-items (image-attachment integer) list)
 (defun image-input-content-items (attachment label-number)
   "Return Codex-compatible provider content for ATTACHMENT labelled LABEL-NUMBER."
@@ -661,8 +669,5 @@
     "text" (format nil "<image name=[Image #~D] path=\"~A\">"
                    label-number
                    (image-attachment-source-name attachment)))
-   (json-object
-    "type" "input_image"
-    "image_url" (image-input--data-url attachment)
-    "detail" "high")
+   (image-input-content-item attachment)
    (json-object "type" "input_text" "text" "</image>")))

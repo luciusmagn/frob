@@ -73,15 +73,72 @@
                            (with-output-to-string (stream)
                              (prin1 records stream))))
               "conversation records never inline image bytes")
+             (let* ((call
+                      (json-object
+                       "type" "function_call"
+                       "call_id" "view-1"
+                       "namespace" "fs"
+                       "name" "view-image"
+                       "arguments"
+                       (json-encode
+                        (json-object "path" (namestring source)))))
+                    (tool-attachment
+                      (image-input-prepare
+                       source
+                       (conversation-image-artifact-root conversation)))
+                    (tool-item nil))
+               (conversation-append-provider-item conversation call)
+               (setf tool-item
+                     (conversation-append-tool-result
+                      conversation
+                      "view-1"
+                      :tool-name "fs.view-image"
+                      :output "Viewed the image."
+                      :image-attachments (list tool-attachment)
+                      :success-p t))
+               (let* ((tool-output (json-get tool-item "output"))
+                      (durable-records
+                        (conversation--read-records
+                         (conversation-pathname conversation)))
+                      (tool-record
+                        (find :tool-result durable-records :key #'first)))
+                 (test-assert
+                  (and (vectorp tool-output)
+                       (= (length tool-output) 1)
+                       (string= (json-get (aref tool-output 0) "type")
+                                "input_image")
+                       (uiop:string-prefix-p
+                        "data:image/png;base64,"
+                        (json-get (aref tool-output 0) "image_url")))
+                  "image tools return native image content in their output")
+                 (test-assert
+                  (and (getf (rest tool-record) :images)
+                       (null (getf (rest tool-record) :wire-json))
+                       (not (search
+                             "data:image"
+                             (with-output-to-string (stream)
+                               (prin1 tool-record stream)))))
+                  "image tool results persist descriptors instead of base64"))
              (let* ((loaded
                       (conversation-load-by-id configuration "images"))
                     (loaded-content
                       (json-get (first (conversation-input-items loaded))
-                                "content")))
+                                "content"))
+                    (loaded-tool-output
+                      (json-get (third (conversation-input-items loaded))
+                                "output")))
                (test-assert
                 (string= (json-get (aref loaded-content 1) "image_url")
                          (json-get (aref content 1) "image_url"))
-                "conversation replay reconstructs the exact provider image"))
+                "conversation replay reconstructs the exact user image")
+               (test-assert
+                (and (vectorp loaded-tool-output)
+                     (string=
+                      (json-get (aref loaded-tool-output 0) "image_url")
+                      (json-get
+                       (aref (json-get tool-item "output") 0)
+                       "image_url")))
+                "conversation replay reconstructs the exact image tool output")))
              (delete-file artifact)
              (test-assert
               (handler-case

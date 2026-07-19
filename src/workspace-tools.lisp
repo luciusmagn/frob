@@ -11,6 +11,10 @@
   ()
   (:documentation "Read one workspace file with numbered lines."))
 
+(defclass fs-view-image-tool (workspace-tool)
+  ()
+  (:documentation "Attach one local image to the model for visual inspection."))
+
 (defclass fs-list-tool (workspace-tool)
   ()
   (:documentation "List one workspace directory with entry kinds and sizes."))
@@ -114,6 +118,26 @@ through private image commits instead."
 
 
 ;;;; -- Tool Executions --
+
+(defmethod tool-execute ((tool fs-view-image-tool)
+                         (context tool-context)
+                         (arguments hash-table))
+  "Return a local image as native provider image content."
+  (let* ((path (workspace-tool-path
+                context
+                (tool-argument arguments "path" :required t)))
+         (conversation (tool-context-conversation context))
+         (attachment
+           (image-input-prepare
+            path
+            (conversation-image-artifact-root conversation))))
+    (tool-success
+     (format nil "Viewed ~A (~Dx~D, ~A)."
+             (image-attachment-source-name attachment)
+             (image-attachment-width attachment)
+             (image-attachment-height attachment)
+             (image-attachment-mime-type attachment))
+     :image-attachments (list attachment))))
 
 (defmethod tool-execute ((tool fs-read-tool)
                          (context tool-context)
