@@ -272,8 +272,9 @@ hash-verified matching SBCL source as a read-only reference. It builds the
 recovery runtime into a read-only pristine core and builds the separate
 preloaded active image outside the repository. Both builders record exact
 source provenance and boot-probe each temporary image. The launcher repeats the
-versioned probes before use. It
-reports source loading immediately when the active image is missing or stale.
+versioned probes before use. An interactive missing-image path offers to run the
+bootstrap in place, while declining or a non-interactive launch uses source.
+=--from-source= bypasses the image probe and prompt entirely.
 Recovery reports
 sanitized crash and mutation context, creates private exact-commit checkouts,
 and boots retained cores without loading damaged active source. A failed

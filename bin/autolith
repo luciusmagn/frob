@@ -6,6 +6,7 @@ launcher_path=$(readlink -f -- "${BASH_SOURCE[0]}")
 source_root=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
 terminal_state=
 recovery_requested=false
+from_source_requested=false
 remaining_arguments=()
 state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
@@ -16,6 +17,7 @@ runtime_command_path=$data_home/autolith/runtimes/$runtime_version/command
 runtime_source_root=$runtime_root/source
 source_identity_path=$runtime_root/source.identity
 inherited_runtime_source_root=${AUTOLITH_SBCL_SOURCE_ROOT:-}
+configured_sbcl=${AUTOLITH_SBCL:-}
 recorded_runtime=
 if [[ -r "$runtime_command_path" ]]; then
   IFS= read -r recorded_runtime < "$runtime_command_path" || recorded_runtime=
@@ -51,11 +53,17 @@ active_manifest=$(dirname -- "$active_core")/manifest.sexp
 crash_pointer=
 
 for argument in "$@"; do
-  if [[ "$argument" == "--recovery" ]]; then
-    recovery_requested=true
-  else
-    remaining_arguments+=("$argument")
-  fi
+  case "$argument" in
+    --recovery)
+      recovery_requested=true
+      ;;
+    --from-source)
+      from_source_requested=true
+      ;;
+    *)
+      remaining_arguments+=("$argument")
+      ;;
+  esac
 done
 
 if [[ -t 0 ]]; then
@@ -93,22 +101,106 @@ run_recovery()
   fi
 }
 
-run_active()
+active_image_valid()
 {
-  export AUTOLITH_SOURCE_ROOT="$source_root"
-  if [[ -f "$active_core" && -f "$active_manifest" ]] &&
+  [[ -f "$active_core" && -f "$active_manifest" ]] &&
      grep -Eq '^\(:ACTIVE-IMAGE :VERSION 1([[:space:]]|$)' "$active_manifest" &&
      "$sbcl_command" --noinform --core "$active_core" \
        --end-runtime-options "$source_root" \
-       --autolith-internal-active-image-probe >/dev/null 2>&1; then
-    "$sbcl_command" --noinform --core "$active_core" \
-      --end-runtime-options "$source_root" "$@"
+       --autolith-internal-active-image-probe >/dev/null 2>&1
+}
+
+run_active_core()
+{
+  "$sbcl_command" --noinform --core "$active_core" \
+    --end-runtime-options "$source_root" "$@"
+}
+
+run_active_source()
+{
+  "$sbcl_command" --script "$source_root/bin/autolith-active" "$@"
+}
+
+refresh_runtime_command()
+{
+  local installed_runtime=
+
+  if [[ -r "$runtime_command_path" ]]; then
+    IFS= read -r installed_runtime < "$runtime_command_path" || installed_runtime=
+  fi
+  if [[ "$installed_runtime" == /* && -x "$installed_runtime" ]]; then
+    sbcl_command=$installed_runtime
+    export AUTOLITH_SBCL=$sbcl_command
+  fi
+}
+
+bootstrap_active_image()
+{
+  local bootstrap_status
+
+  if [[ -n "$configured_sbcl" ]]; then
+    AUTOLITH_SBCL="$configured_sbcl" "$source_root/script/bootstrap"
   else
-    if [[ -t 2 ]]; then
-      printf 'Loading Autolith from source. A cold dependency cache can take a minute.\n' >&2
-      printf 'Run "%s/script/bootstrap" to install the fast startup image.\n' "$source_root" >&2
+    env -u AUTOLITH_SBCL "$source_root/script/bootstrap"
+  fi
+  bootstrap_status=$?
+  if [[ "$bootstrap_status" -ne 0 ]]; then
+    printf 'Autolith bootstrap failed with status %d.\n' "$bootstrap_status" >&2
+    return 64
+  fi
+  refresh_runtime_command
+  if ! active_image_valid; then
+    printf 'Autolith bootstrap completed without a usable fast startup image.\n' >&2
+    return 64
+  fi
+  return 0
+}
+
+offer_bootstrap()
+{
+  local answer=
+
+  while true; do
+    printf 'Autolith fast startup image is missing or stale. Run "%s/script/bootstrap" now? [Y/n] ' \
+      "$source_root" >&2
+    if ! IFS= read -r answer; then
+      answer=n
     fi
-    "$sbcl_command" --script "$source_root/bin/autolith-active" "$@"
+    case "$answer" in
+      ''|y|Y|yes|YES|Yes)
+        bootstrap_active_image
+        return $?
+        ;;
+      n|N|no|NO|No)
+        return 1
+        ;;
+      *)
+        printf 'Please answer yes or no.\n' >&2
+        ;;
+    esac
+  done
+}
+
+run_active()
+{
+  export AUTOLITH_SOURCE_ROOT="$source_root"
+  if [[ "$from_source_requested" == true ]]; then
+    run_active_source "$@"
+  elif active_image_valid; then
+    run_active_core "$@"
+  elif [[ -t 0 && -t 2 ]]; then
+    if offer_bootstrap; then
+      run_active_core "$@"
+    else
+      status=$?
+      if [[ "$status" -eq 64 ]]; then
+        return 64
+      fi
+      printf 'Loading Autolith from source.\n' >&2
+      run_active_source "$@"
+    fi
+  else
+    run_active_source "$@"
   fi
 }
 
@@ -127,7 +219,7 @@ crash_pointer="$crash_pointer_directory/launcher-$$.path"
 rm -f -- "$crash_pointer"
 export AUTOLITH_CRASH_POINTER="$crash_pointer"
 
-if run_active "$@"; then
+if run_active "${remaining_arguments[@]}"; then
   exit 0
 else
   status=$?
@@ -154,10 +246,10 @@ if [[ "$status" -ne 64 && "$status" -ne 130 && "$status" -ne 143 ]]; then
   if [[ -n "$capsule" ]]; then
     recovery_arguments+=("--capsule" "$capsule")
   fi
-  for argument in "$@"; do
+  for argument in "${remaining_arguments[@]}"; do
     recovery_arguments+=("--original-argument" "$argument")
   done
-  recovery_arguments+=("--" "$@")
+  recovery_arguments+=("--" "${remaining_arguments[@]}")
   run_recovery "${recovery_arguments[@]}"
   exit $?
 fi

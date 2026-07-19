@@ -1340,6 +1340,8 @@
                  "the removed --resume option is not recognized"))
   (test-assert (search "--immutable" (main-usage))
                "command-line help documents immutable mode")
+  (test-assert (search "--from-source" (main-usage))
+               "command-line help documents deliberate source startup")
   (test-assert (not (search "--resume" (main-usage)))
                "command-line help omits the removed --resume option")
   (let* ((configuration (test-configuration))

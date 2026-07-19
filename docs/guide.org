@@ -104,11 +104,13 @@ a read-only inspection reference, never as a live patch target.
 The launcher probes the preloaded image against the current SBCL, operating
 system, architecture, and content hash of every Autolith source input plus the
 dependency lock. A valid image avoids dependency and application loading on each
-launch. When it is missing or stale, Autolith safely loads from source and
-immediately says so; a cold Common Lisp compilation cache can take a minute.
-Run =./script/bootstrap= again after changing compiled source to refresh the fast
-startup image. The source loader and check script prefer the project-local
-dependency environment, then fall back to the user's Quicklisp.
+launch. When it is missing or stale during an interactive launch, Autolith asks
+whether to run =script/bootstrap= immediately. Accepting rebuilds and starts the
+new validated image; declining loads from source. Non-interactive launches fall
+back directly to source. Pass =--from-source= to deliberately skip image
+validation, the bootstrap prompt, and missing-image notices. The source loader
+and check script prefer the project-local dependency environment, then fall back
+to the user's Quicklisp.
 
 On systems where OpenSSL is outside the dynamic loader's normal search path,
 make its library directory visible to CFFI. Autolith automatically adds

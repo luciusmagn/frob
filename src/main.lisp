@@ -298,8 +298,8 @@
 (-> main-usage () string)
 (defun main-usage ()
   "Return the command-line usage text."
-  "Usage: autolith [--immutable]
-       autolith [--immutable] resume [ID]
+  "Usage: autolith [--from-source] [--immutable]
+       autolith [--from-source] [--immutable] resume [ID]
        autolith --auth
        autolith --version
        autolith --recovery [--generation ID | --list]")

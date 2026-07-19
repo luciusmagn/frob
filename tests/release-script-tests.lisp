@@ -113,7 +113,8 @@
 (-> release-script-tests--syntax (pathname) null)
 (defun release-script-tests--syntax (source-root)
   "Check the remaining bootstrap shell boundaries and tracked Lisp programs."
-  (dolist (relative '("bin/autolith-release"
+  (dolist (relative '("bin/autolith"
+                      "bin/autolith-release"
                       "script/build-release"
                       "script/build-release-runtime"
                       "server/build-in-container"))
@@ -142,6 +143,131 @@
             (merge-pathnames "server/Containerfile" source-root)))
    "the release container selects its pinned Rust toolchain")
   nil)
+
+(-> release-script-tests--source-launcher (pathname pathname) null)
+(defun release-script-tests--source-launcher (source-root root)
+  "Exercise source-image selection, bootstrap prompting, and forced source use."
+  (let* ((fixture-root (merge-pathnames "source-launcher/" root))
+         (bin-directory (merge-pathnames "bin/" fixture-root))
+         (script-directory (merge-pathnames "script/" fixture-root))
+         (recovery-directory (merge-pathnames "recovery/" fixture-root))
+         (data-home (merge-pathnames "data/" fixture-root))
+         (state-home (merge-pathnames "state/" fixture-root))
+         (active-directory (merge-pathnames "autolith/active/" data-home))
+         (active-core (merge-pathnames "autolith-active.core" active-directory))
+         (active-manifest (merge-pathnames "manifest.sexp" active-directory))
+         (launcher (merge-pathnames "autolith" bin-directory))
+         (active-source (merge-pathnames "autolith-active" bin-directory))
+         (bootstrap (merge-pathnames "bootstrap" script-directory))
+         (recovery-source (merge-pathnames "launcher.lisp" recovery-directory))
+         (fake-sbcl (merge-pathnames "fake-sbcl" fixture-root))
+         (log (merge-pathnames "launcher.log" fixture-root)))
+    (uiop:ensure-all-directories-exist
+     (list bin-directory script-directory recovery-directory
+           data-home state-home))
+    (uiop:copy-file (merge-pathnames "bin/autolith" source-root) launcher)
+    (release-script-tests--write-file active-source "")
+    (release-script-tests--write-file recovery-source "")
+    (release-script-tests--write-file
+     (merge-pathnames "sbcl.version" fixture-root)
+     "2.6.4\n")
+    (release-script-tests--write-file
+     (merge-pathnames "sbcl-source.sha256" fixture-root)
+     (format nil "~A~%" (make-string 64 :initial-element #\0)))
+    (release-script-tests--write-file
+     fake-sbcl
+     "#!/bin/sh
+set -eu
+printf 'SBCL %s\\n' \"$*\" >> \"$AUTOLITH_TEST_LOG\"
+mode=UNKNOWN
+probe=false
+for argument in \"$@\"; do
+  case $argument in
+    --autolith-internal-active-image-probe) probe=true ;;
+    */bin/autolith-active) mode=SOURCE ;;
+    */autolith-active.core) mode=ACTIVE ;;
+  esac
+done
+if [ \"$probe\" = true ]; then
+  exit 0
+fi
+printf '%s %s\\n' \"$mode\" \"$*\"
+")
+    (release-script-tests--write-file
+     bootstrap
+     "#!/bin/sh
+set -eu
+printf 'BOOTSTRAP\\n' >> \"$AUTOLITH_TEST_LOG\"
+active=$XDG_DATA_HOME/autolith/active
+mkdir -p \"$active\"
+: > \"$active/autolith-active.core\"
+printf '(:ACTIVE-IMAGE :VERSION 1\\n)\\n' > \"$active/manifest.sexp\"
+")
+    (dolist (pathname (list launcher fake-sbcl bootstrap))
+      (release-script-tests--chmod "755" pathname))
+    (let* ((environment
+             (list (format nil "XDG_DATA_HOME=~A" (namestring data-home))
+                   (format nil "XDG_STATE_HOME=~A" (namestring state-home))
+                   (format nil "AUTOLITH_SBCL=~A" (namestring fake-sbcl))
+                   (format nil "AUTOLITH_TEST_LOG=~A" (namestring log))))
+           (source-output
+             (release-script-tests--run
+              (list (namestring launcher) "--from-source" "fixture-argument")
+              :environment environment)))
+      (test-assert
+       (and (search "SOURCE" source-output)
+            (not (search "fast startup image" source-output))
+            (not (search "--from-source" (uiop:read-file-string log))))
+       "--from-source quietly bypasses images and is not forwarded")
+      (release-script-tests--write-file log "")
+      (let* ((command
+               (format nil
+                       "env ~{~A~^ ~} ~A fixture-argument"
+                       (mapcar #'uiop:escape-shell-token environment)
+                       (uiop:escape-shell-token (namestring launcher))))
+             (output
+               (with-input-from-string (input (format nil "y~%"))
+                 (uiop:run-program
+                  (list "script" "-q" "-e" "-c" command "/dev/null")
+                  :input input
+                  :output :string
+                  :error-output ':output
+                  :ignore-error-status t)))
+             (events (uiop:read-file-string log)))
+        (test-assert
+         (and (search "fast startup image is missing or stale" output)
+              (search "BOOTSTRAP" events)
+              (search "ACTIVE" output)
+              (not (search "SOURCE" output)))
+         (format nil
+                 "accepting the interactive prompt bootstraps and starts the new image:~%terminal: ~A~%events: ~A"
+                 output events)))
+      (dolist (pathname (list active-core active-manifest))
+        (when (probe-file pathname)
+          (delete-file pathname)))
+      (release-script-tests--write-file log "")
+      (let* ((command
+               (format nil
+                       "env ~{~A~^ ~} ~A fixture-argument"
+                       (mapcar #'uiop:escape-shell-token environment)
+                       (uiop:escape-shell-token (namestring launcher))))
+             (output
+               (with-input-from-string (input (format nil "n~%"))
+                 (uiop:run-program
+                  (list "script" "-q" "-e" "-c" command "/dev/null")
+                  :input input
+                  :output :string
+                  :error-output ':output
+                  :ignore-error-status t)))
+             (events (uiop:read-file-string log)))
+        (test-assert
+         (and (search "fast startup image is missing or stale" output)
+              (search "SOURCE" output)
+              (not (search "BOOTSTRAP" events)))
+         (format nil
+                 "declining the interactive prompt loads source without bootstrapping: ~A"
+                 output))))
+  nil))
 
 (-> release-script-tests--launcher (pathname pathname) null)
 (defun release-script-tests--launcher (source-root root)
@@ -294,6 +420,7 @@
     (unwind-protect
          (progn
            (release-script-tests--syntax source-root)
+           (release-script-tests--source-launcher source-root root)
            (release-script-tests--launcher source-root root)
            (release-script-tests--installer source-root root))
       (release-script-tests--cleanup root)))

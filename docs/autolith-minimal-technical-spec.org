@@ -51,8 +51,11 @@ The launcher is small, stable, and outside the mutable agent image. It:
 
 - Starts the current active image.
 - Validates a source-built preloaded image before normal startup.
-- Falls back to source loading with visible progress when that image is absent
-  or stale.
+- On an interactive launch, offers to bootstrap a missing or stale preloaded
+  image before starting and falls back to source when the user declines.
+- Falls back directly to source loading for a non-interactive launch.
+- Recognizes =--from-source= and bypasses image validation, bootstrap prompts,
+  and missing-image notices when it is present.
 - Recognizes =--recovery= itself.
 - Starts the pristine recovery image when =--recovery= is present.
 - Forwards all remaining command-line arguments.
