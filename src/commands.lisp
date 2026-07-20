@@ -872,7 +872,9 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        (application-present application (application-status-entry application))
        :continue)
       ((string= command "/context")
-       (application-present application (context-status))
+       (application-present
+        application
+        (context-status (application-conversation application)))
        :continue)
       ((string= command "/compact")
        (if argument

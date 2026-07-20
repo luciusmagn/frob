@@ -5,6 +5,9 @@
 (defvar *context-test-next-request-p* t
   "Whether the next-request test contributor is currently active.")
 
+(defvar *context-test-invocation-state* nil
+  "A shared mutable counter used by the contributor serialization test.")
+
 (-> context-tests--stacked (request-context) list)
 (defun context-tests--stacked (context)
   "Return overlapping contributions used to exercise request resolution."
@@ -60,6 +63,24 @@
   (declare (ignore context))
   (error "broken contributor"))
 
+(-> context-tests--conversation-advice (request-context) context-contribution)
+(defun context-tests--conversation-advice (context)
+  "Return advice identifying CONTEXT's conversation for diagnostic selection."
+  (let ((identifier
+          (conversation-identifier (request-context-conversation context))))
+    (make-context-contribution
+     :identifier "conversation-advice"
+     :instruction (format nil "Advice for conversation ~A." identifier))))
+
+(-> context-tests--serialized (request-context) context-contribution)
+(defun context-tests--serialized (context)
+  "Record one invocation for the contributor serialization test."
+  (declare (ignore context))
+  (incf (first *context-test-invocation-state*))
+  (make-context-contribution
+   :identifier "serialized"
+   :instruction "Serialized contributor invocation."))
+
 (-> context-tests--mandatory (request-context) list)
 (defun context-tests--mandatory (context)
   "Return mandatory and advisory values used to exercise the budget."
@@ -109,6 +130,56 @@
      "discard restores both contributor function and registration state"))
   nil)
 
+(-> context-tests--serialized-invocation
+    (configuration conversation)
+    null)
+(defun context-tests--serialized-invocation (configuration conversation)
+  "Test that a concurrent request cannot invoke contributors through the lock."
+  (let* ((*context-contributors* nil)
+         (*context-next-request-delivered* (make-hash-table :test #'equal))
+         (*context-last-deliveries* (make-hash-table :test #'equal))
+         (*context-last-delivery-order* nil)
+         (state (list 0))
+         (*context-test-invocation-state* state)
+         (ready-lock (make-lock "Autolith context test ready"))
+         (ready-condition (make-condition-variable))
+         (ready-p nil)
+         (thread nil)
+         (thread-error nil))
+    (register-context-contributor "serialized" 'context-tests--serialized)
+    (let ((registrations *context-contributors*)
+          (receipts *context-next-request-delivered*)
+          (deliveries *context-last-deliveries*)
+          (delivery-order *context-last-delivery-order*))
+      (with-lock-held (*context-contributor-invocation-lock*)
+        (setf thread
+              (make-thread
+               (lambda ()
+                 (let ((*context-contributors* registrations)
+                       (*context-next-request-delivered* receipts)
+                       (*context-last-deliveries* deliveries)
+                       (*context-last-delivery-order* delivery-order)
+                       (*context-test-invocation-state* state))
+                   (with-lock-held (ready-lock)
+                     (setf ready-p t)
+                     (condition-notify ready-condition))
+                   (handler-case
+                       (context-resolve-request configuration conversation #())
+                     (error (condition)
+                       (setf thread-error condition)))))
+               :name "Autolith context serialization test"))
+        (with-lock-held (ready-lock)
+          (loop until ready-p
+                do (condition-wait ready-condition ready-lock)))
+        (test-assert (zerop (first state))
+                     "contributor invocation waits for its serialization lock"))
+      (join-thread thread)
+      (when thread-error
+        (error thread-error))
+      (test-assert (= (first state) 1)
+                   "the waiting request invokes its contributor exactly once")))
+  nil)
+
 (-> test-request-local-context () null)
 (defun test-request-local-context ()
   "Test contributor stacking, lifecycle, budgeting, failures, and projection."
@@ -119,7 +190,8 @@
                                             :identifier "context-test"))
          (*context-contributors* nil)
          (*context-next-request-delivered* (make-hash-table :test #'equal))
-         (*context-last-delivery* nil)
+         (*context-last-deliveries* (make-hash-table :test #'equal))
+         (*context-last-delivery-order* nil)
          (*context-test-next-request-p* t))
     (unwind-protect
          (progn
@@ -162,6 +234,42 @@
                     (context-delivery-rendered
                      (context-resolve-request configuration conversation #())))
             "a later activation may deliver the same next-request advice again")
+           (clrhash *context-next-request-delivered*)
+           (let ((other-conversation
+                   (conversation-create configuration
+                                        :identifier "context-test-other")))
+             (let ((first
+                     (context-resolve-request configuration conversation #())))
+               (context-delivery-complete first))
+             (let ((first
+                     (context-resolve-request configuration
+                                              other-conversation
+                                              #())))
+               (context-delivery-complete first))
+             (test-assert
+              (not (search "next completed request"
+                           (or (context-delivery-rendered
+                                (context-resolve-request configuration
+                                                         conversation
+                                                         #()))
+                               "")))
+              "another conversation cannot erase a next-request receipt")
+             (setf *context-test-next-request-p* nil)
+             (context-resolve-request configuration conversation #())
+             (setf *context-test-next-request-p* t)
+             (test-assert
+              (search "next completed request"
+                      (context-delivery-rendered
+                       (context-resolve-request configuration conversation #())))
+              "inactive advice clears the receipt only for its conversation")
+             (test-assert
+              (not (search "next completed request"
+                           (or (context-delivery-rendered
+                                (context-resolve-request configuration
+                                                         other-conversation
+                                                         #()))
+                               "")))
+              "conversation-local cleanup preserves another conversation's receipt"))
            (setf *context-contributors* nil
                  *context-advice-token-budget* 20)
            (register-context-contributor "budget" 'context-tests--mandatory)
@@ -184,6 +292,55 @@
                           "contributor failures degrade to diagnostics")
              (test-assert (search "broken contributor" (context-status))
                           "/context diagnostics expose contributor failures"))
+           (setf *context-contributors* nil)
+           (register-context-contributor
+            "conversation-advice"
+            'context-tests--conversation-advice)
+           (let ((other-conversation
+                   (conversation-create configuration
+                                        :identifier "context-diagnostic-other")))
+             (context-resolve-request configuration conversation #())
+             (context-resolve-request configuration other-conversation #())
+             (let ((current-status (context-status conversation))
+                   (other-status (context-status other-conversation))
+                   (latest-status (context-status)))
+               (test-assert
+                (and (search "Advice for conversation context-test."
+                             current-status)
+                     (not (search
+                           "Advice for conversation context-diagnostic-other."
+                           current-status)))
+                "/context selects diagnostics for the current conversation")
+               (test-assert
+                (search "Advice for conversation context-diagnostic-other."
+                        other-status)
+                "diagnostics retain another conversation's newest delivery")
+               (test-assert
+                (search "conversation context-diagnostic-other" latest-status)
+                "context-status without a selection retains newest-first behavior")))
+           (clrhash *context-last-deliveries*)
+           (setf *context-last-delivery-order* nil)
+           (loop for index below (+ +context-delivery-diagnostic-limit+ 2)
+                 for identifier = (format nil "context-diagnostic-~2,'0D" index)
+                 for diagnostic-conversation =
+                   (conversation-create configuration :identifier identifier)
+                 do (context-resolve-request configuration
+                                             diagnostic-conversation
+                                             #()))
+           (test-assert
+            (= (hash-table-count *context-last-deliveries*)
+               +context-delivery-diagnostic-limit+)
+            "per-conversation context diagnostics stay bounded")
+           (test-assert
+            (= (length *context-last-delivery-order*)
+               +context-delivery-diagnostic-limit+)
+            "the context diagnostic recency index stays bounded")
+           (test-assert
+            (and (null (gethash "context-diagnostic-00"
+                                *context-last-deliveries*))
+                 (gethash "context-diagnostic-33"
+                          *context-last-deliveries*))
+            "context diagnostics evict the oldest conversation first")
            (setf *context-contributors* nil
                  *context-advice-token-budget* 1500)
            (register-context-contributor "next" 'context-tests--next-request)
@@ -210,6 +367,7 @@
              (test-assert
               (string= (request-context-latest-user-text request)
                        "inspect this request")
-              "contributors receive the latest durable user text")))
+              "contributors receive the latest durable user text"))
+           (context-tests--serialized-invocation configuration conversation))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)

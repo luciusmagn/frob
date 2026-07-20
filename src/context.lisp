@@ -14,6 +14,10 @@
 (define-constant +context-contribution-reference-limit+ 32
   :documentation "The maximum supersession references on one contribution.")
 
+(define-constant +context-delivery-diagnostic-limit+ 32
+  :documentation
+  "The maximum number of conversations retaining last-delivery diagnostics.")
+
 (defparameter *context-advice-token-budget* 1500
   "The approximate request-token budget shared by advisory contributions.")
 
@@ -26,11 +30,18 @@
 (defvar *context-next-request-delivered* (make-hash-table :test #'equal)
   "Contribution keys delivered while their next-request trigger remains active.")
 
-(defvar *context-last-delivery* nil
-  "The most recently assembled normal provider-request context.")
+(defvar *context-last-deliveries* (make-hash-table :test #'equal)
+  "Conversation identifiers mapped to their newest context delivery.")
+
+(defvar *context-last-delivery-order* nil
+  "Conversation identifiers with diagnostics, newest delivery first.")
 
 (defvar *context-lock* (make-lock "Autolith request-local context")
   "The lock protecting registrations, delivery state, and diagnostics.")
+
+(defvar *context-contributor-invocation-lock*
+  (make-lock "Autolith context contributor invocation")
+  "The lock serializing user-extensible contributor function calls.")
 
 
 ;;;; -- Request and Contribution Values --
@@ -572,7 +583,8 @@ same evaluation behavior as DEFUN."
       (let ((inactive-keys nil))
         (maphash (lambda (key delivered-p)
                    (declare (ignore delivered-p))
-                   (unless (member key active-keys :test #'equal)
+                   (when (and (string= conversation-identifier (first key))
+                              (not (member key active-keys :test #'equal)))
                      (push key inactive-keys)))
                  *context-next-request-delivered*)
         (dolist (key inactive-keys)
@@ -631,6 +643,54 @@ same evaluation behavior as DEFUN."
                                (context-contribution-evidence contribution)))))
                ordered)))))
 
+(-> context--invoke-contributors
+    (request-context list)
+    (values list list))
+(defun context--invoke-contributors (request registrations)
+  "Invoke REGISTRATIONS serially for REQUEST, returning values and failures."
+  (let ((contributions nil)
+        (failures nil))
+    (with-lock-held (*context-contributor-invocation-lock*)
+      (dolist (registration registrations)
+        (let ((identifier (getf registration :identifier))
+              (function (getf registration :function))
+              (source (getf registration :source)))
+          (handler-case
+              (setf contributions
+                    (append contributions
+                            (context--normalize-result
+                             (funcall function request)
+                             identifier
+                             source)))
+            (error (condition)
+              (push (cons identifier
+                          (bounded-string (format nil "~A" condition)
+                                          :limit 500))
+                    failures))))))
+    (values contributions (nreverse failures))))
+
+(-> context--remember-delivery (context-delivery) null)
+(defun context--remember-delivery (delivery)
+  "Retain DELIVERY as bounded per-conversation diagnostic state."
+  (let ((identifier (context-delivery-conversation-identifier delivery)))
+    (with-lock-held (*context-lock*)
+      (setf (gethash identifier *context-last-deliveries*) delivery
+            *context-last-delivery-order*
+            (cons identifier
+                  (remove identifier *context-last-delivery-order*
+                          :test #'string=)))
+      (let ((evicted
+              (nthcdr +context-delivery-diagnostic-limit+
+                      *context-last-delivery-order*)))
+        (dolist (evicted-identifier evicted)
+          (remhash evicted-identifier *context-last-deliveries*))
+        (when evicted
+          (setf *context-last-delivery-order*
+                (subseq *context-last-delivery-order*
+                        0
+                        +context-delivery-diagnostic-limit+))))))
+  nil)
+
 (-> context-resolve-request
     (configuration conversation vector
      &key (:goal-context (option string)) (:compaction-p boolean))
@@ -646,45 +706,29 @@ same evaluation behavior as DEFUN."
                           :tool-namespaces tool-namespaces
                           :goal-context goal-context
                           :compaction-p compaction-p))
-         (registrations (context-contributor-registrations))
-         (contributions nil)
-         (failures nil))
-    (dolist (registration registrations)
-      (let ((identifier (getf registration :identifier))
-            (function (getf registration :function))
-            (source (getf registration :source)))
-        (handler-case
-            (setf contributions
-                  (append contributions
-                          (context--normalize-result
-                           (funcall function request)
-                           identifier
-                           source)))
-          (error (condition)
-            (push (cons identifier
-                        (bounded-string (format nil "~A" condition) :limit 500))
-                  failures)))))
-    (let* ((resolved
-             (context--filter-consumed-next-request
-              (conversation-identifier conversation)
-              (context--resolve-conflicts
-               (context--apply-supersession
-                (context--deduplicate contributions))))))
-      (multiple-value-bind (selected omitted)
-          (context--fit-budget resolved)
-        (let ((delivery
-                (make-instance
-                 'context-delivery
-                 :conversation-identifier
-                 (conversation-identifier conversation)
-                 :created-at (get-universal-time)
-                 :contributions selected
-                 :omitted omitted
-                 :failures (nreverse failures)
-                 :rendered (context--render selected))))
-          (with-lock-held (*context-lock*)
-            (setf *context-last-delivery* delivery))
-          delivery)))))
+         (registrations (context-contributor-registrations)))
+    (multiple-value-bind (contributions failures)
+        (context--invoke-contributors request registrations)
+      (let* ((resolved
+               (context--filter-consumed-next-request
+                (conversation-identifier conversation)
+                (context--resolve-conflicts
+                 (context--apply-supersession
+                  (context--deduplicate contributions))))))
+        (multiple-value-bind (selected omitted)
+            (context--fit-budget resolved)
+          (let ((delivery
+                  (make-instance
+                   'context-delivery
+                   :conversation-identifier
+                   (conversation-identifier conversation)
+                   :created-at (get-universal-time)
+                   :contributions selected
+                   :omitted omitted
+                   :failures failures
+                   :rendered (context--render selected))))
+            (context--remember-delivery delivery)
+            delivery))))))
 
 (-> context-delivery-complete ((option context-delivery)) null)
 (defun context-delivery-complete (delivery)
@@ -706,7 +750,8 @@ same evaluation behavior as DEFUN."
   "Discard delivery receipts and one-shot state without changing registrations."
   (with-lock-held (*context-lock*)
     (clrhash *context-next-request-delivered*)
-    (setf *context-last-delivery* nil))
+    (clrhash *context-last-deliveries*)
+    (setf *context-last-delivery-order* nil))
   nil)
 
 
@@ -730,44 +775,77 @@ same evaluation behavior as DEFUN."
           (context--token-estimate contribution)
           (context-contribution-instruction contribution)))
 
-(-> context-status () string)
-(defun context-status ()
-  "Return registered contributors and the last request's ephemeral context receipt."
-  (let ((registrations (context-contributor-registrations))
-        (delivery (with-lock-held (*context-lock*) *context-last-delivery*)))
-    (format nil
-            "Registered context contributors:~%~A~2%Last request-local context:~%~A"
-            (if registrations
-                (format nil "~{~A~^~%~}"
-                        (mapcar
-                         (lambda (registration)
-                           (format nil "~A  [~(~A~)]  ~A"
-                                   (getf registration :identifier)
-                                   (getf registration :source)
-                                   (context--function-label
-                                    (getf registration :function))))
-                         registrations))
-                "none")
-            (cond
-              ((null delivery)
-               "none assembled")
-              ((and (null (context-delivery-contributions delivery))
-                    (null (context-delivery-omitted delivery))
-                    (null (context-delivery-failures delivery)))
-               "none active")
-              (t
-               (format nil
-                       "conversation ~A~%~@[active:~%~{~A~^~%~}~%~]~@[omitted by budget:~%~{~A~^~%~}~%~]~@[contributor failures:~%~{~A~^~%~}~]"
-                       (context-delivery-conversation-identifier delivery)
-                       (and (context-delivery-contributions delivery)
-                            (mapcar #'context--contribution-status-line
-                                    (context-delivery-contributions delivery)))
-                       (and (context-delivery-omitted delivery)
-                            (mapcar #'context--contribution-status-line
-                                    (context-delivery-omitted delivery)))
-                       (and (context-delivery-failures delivery)
-                            (mapcar (lambda (failure)
-                                      (format nil "~A: ~A"
-                                              (first failure)
-                                              (rest failure)))
-                                    (context-delivery-failures delivery)))))))))
+(-> context--conversation-identifier
+    ((or null conversation string))
+    (option string))
+(defun context--conversation-identifier (conversation-designator)
+  "Return the identifier named by CONVERSATION-DESIGNATOR, or NIL."
+  (etypecase conversation-designator
+    (null
+     nil)
+    (conversation
+     (conversation-identifier conversation-designator))
+    (string
+     (unless (non-empty-string-p conversation-designator)
+       (error 'configuration-error
+              :message "A context diagnostic conversation identifier cannot be empty."))
+     conversation-designator)))
+
+(-> context--diagnostic-delivery
+    ((or null conversation string))
+    (values (option string) (option context-delivery)))
+(defun context--diagnostic-delivery (conversation-designator)
+  "Return the selected conversation identifier and its newest delivery."
+  (let ((requested-identifier
+          (context--conversation-identifier conversation-designator)))
+    (with-lock-held (*context-lock*)
+      (let ((identifier
+              (or requested-identifier
+                  (first *context-last-delivery-order*))))
+        (values identifier
+                (and identifier
+                     (gethash identifier *context-last-deliveries*)))))))
+
+(-> context-status (&optional (or null conversation string)) string)
+(defun context-status (&optional conversation-designator)
+  "Return contributors and diagnostics selected by CONVERSATION-DESIGNATOR."
+  (let ((registrations (context-contributor-registrations)))
+    (multiple-value-bind (identifier delivery)
+        (context--diagnostic-delivery conversation-designator)
+      (format nil
+              "Registered context contributors:~%~A~2%Last request-local context~@[ for conversation ~A~]:~%~A"
+              (if registrations
+                  (format nil "~{~A~^~%~}"
+                          (mapcar
+                           (lambda (registration)
+                             (format nil "~A  [~(~A~)]  ~A"
+                                     (getf registration :identifier)
+                                     (getf registration :source)
+                                     (context--function-label
+                                      (getf registration :function))))
+                           registrations))
+                  "none")
+              identifier
+              (cond
+                ((null delivery)
+                 "none assembled")
+                ((and (null (context-delivery-contributions delivery))
+                      (null (context-delivery-omitted delivery))
+                      (null (context-delivery-failures delivery)))
+                 "none active")
+                (t
+                 (format nil
+                         "conversation ~A~%~@[active:~%~{~A~^~%~}~%~]~@[omitted by budget:~%~{~A~^~%~}~%~]~@[contributor failures:~%~{~A~^~%~}~]"
+                         (context-delivery-conversation-identifier delivery)
+                         (and (context-delivery-contributions delivery)
+                              (mapcar #'context--contribution-status-line
+                                      (context-delivery-contributions delivery)))
+                         (and (context-delivery-omitted delivery)
+                              (mapcar #'context--contribution-status-line
+                                      (context-delivery-omitted delivery)))
+                         (and (context-delivery-failures delivery)
+                              (mapcar (lambda (failure)
+                                        (format nil "~A: ~A"
+                                                (first failure)
+                                                (rest failure)))
+                                      (context-delivery-failures delivery))))))))))
