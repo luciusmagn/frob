@@ -118,6 +118,7 @@
     (run-agent-tests)
     (test-task-orchestration)
     (test-task-child-shared-agent-loop)
+    (test-task-scheduler)
     (run-terminal-tests)
     (run-layout-tests)
     (run-markdown-tests)

@@ -30,6 +30,90 @@
   ()
   (:documentation "Record whether a call after terminal yield was executed."))
 
+(defclass task-test-provider (model-provider)
+  ((lock
+    :initform (make-lock "Autolith task test provider")
+    :reader task-test-provider-lock
+    :documentation "The lock protecting deterministic request counters.")
+   (mode
+    :initarg :mode
+    :reader task-test-provider-mode
+    :type keyword
+    :documentation "The :CONCURRENT or :NESTED response script.")
+   (active-count
+    :initform 0
+    :accessor task-test-provider-active-count
+    :type (integer 0)
+    :documentation "The provider requests currently executing.")
+   (maximum-active-count
+    :initform 0
+    :accessor task-test-provider-maximum-active-count
+    :type (integer 0)
+    :documentation "The largest observed concurrent request count.")
+   (request-count
+    :initform 0
+    :accessor task-test-provider-request-count
+    :type (integer 0)
+    :documentation "The total scripted requests observed.")
+   (threads
+    :initform nil
+    :accessor task-test-provider-threads
+    :type list
+    :documentation "The distinct reusable workers that reached the provider."))
+  (:documentation "A thread-safe provider for scheduler integration tests."))
+
+(defmethod provider-with-configuration
+    ((provider task-test-provider) (configuration configuration))
+  "Share PROVIDER across test children while ignoring CONFIGURATION."
+  (declare (ignore configuration))
+  provider)
+
+(defmethod provider-stream-turn
+    ((provider task-test-provider)
+     (conversation conversation)
+     &key tool-namespaces event-callback goal-context compaction-p)
+  "Return a deterministic yield or nested task call for PROVIDER."
+  (declare (ignore conversation tool-namespaces goal-context compaction-p))
+  (let ((request-number nil))
+    (with-lock-held ((task-test-provider-lock provider))
+      (incf (task-test-provider-request-count provider))
+      (incf (task-test-provider-active-count provider))
+      (pushnew (current-thread) (task-test-provider-threads provider) :test #'eq)
+      (setf request-number (task-test-provider-request-count provider)
+            (task-test-provider-maximum-active-count provider)
+            (max (task-test-provider-maximum-active-count provider)
+                 (task-test-provider-active-count provider))))
+    (unwind-protect
+         (progn
+           (when (eq (task-test-provider-mode provider) :concurrent)
+             (sleep 0.05))
+           (funcall event-callback
+                    (make-instance 'assistant-delta-event :text "task test"))
+           (agent-test-result
+            (format nil "task-test-~D" request-number)
+            (list
+             (if (and (eq (task-test-provider-mode provider) :nested)
+                      (= request-number 1))
+                 (agent-test-call
+                  :call-id "nested-task"
+                  :namespace "task"
+                  :name "run"
+                  :arguments
+                  (json-encode
+                   (json-object "agent" "task"
+                                "task" "Return the nested leaf result.")))
+                 (agent-test-call
+                  :call-id (format nil "yield-~D" request-number)
+                  :namespace "yield"
+                  :name "submit"
+                  :arguments
+                  (json-encode
+                   (json-object "status" "success"
+                                "text"
+                                (format nil "result ~D" request-number))))))))
+      (with-lock-held ((task-test-provider-lock provider))
+        (decf (task-test-provider-active-count provider))))))
+
 (defmethod tool-execute
     ((tool task-test-effect-tool)
      (context tool-context)
@@ -183,9 +267,14 @@
                   (job (make-instance 'task-job
                                       :orchestrator orchestrator
                                       :identity (list :id "yield-test" :index 1)
+                                      :execution-identifier (make-identifier)
                                       :definition definition
                                       :item (list :task "Yield")
                                       :parent-agent parent
+                                      :root-conversation-identifier
+                                      (conversation-identifier
+                                       (agent-conversation parent))
+                                      :owner-identifiers nil
                                       :detached-p nil))
                   (child (make-instance 'task-child-agent
                                         :configuration configuration
@@ -245,9 +334,14 @@
            (make-instance 'task-job
                           :orchestrator orchestrator
                           :identity (list :id "runtime-child" :index 1)
+                          :execution-identifier (make-identifier)
                           :definition definition
                           :item (list :task "Exercise the shared loop.")
                           :parent-agent parent
+                          :root-conversation-identifier
+                          (conversation-identifier
+                           (agent-conversation parent))
+                          :owner-identifiers nil
                           :detached-p nil))
          (completion (make-instance 'task-completion))
          (conversation
@@ -322,4 +416,155 @@
                    (null (getf (rest (third results)) :cpu-microseconds)))
               "executed child calls retain timings while rejected calls omit them")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> task-tests--run-scheduler-case (task-test-provider json-object) list)
+(defun task-tests--run-scheduler-case (provider arguments)
+  "Execute one real task tool case and return observations after clean shutdown."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (registry (task-augment-tool-registry
+                    (make-default-tool-registry)))
+         (conversation (conversation-create configuration))
+         (parent
+          (agent-create :configuration configuration
+                        :provider provider
+                        :conversation conversation
+                        :tool-registry registry
+                        :worker nil))
+         (tool (tool-registry-find registry "task" "run"))
+         (orchestrator (task-run-tool-orchestrator tool))
+         (context
+          (make-instance 'tool-context
+                         :configuration configuration
+                         :worker nil
+                         :conversation conversation
+                         :registry registry
+                         :agent parent
+                         :call-id "task-scheduler-test"))
+         (started-at (get-internal-real-time)))
+    (unwind-protect
+         (let* ((result (tool-execute tool context arguments))
+                (jobs (task-orchestrator-list-jobs orchestrator))
+                (details (tool-result-details result))
+                (workers
+                 (with-lock-held ((task-orchestrator-lock orchestrator))
+                   (copy-list
+                    (task-orchestrator-worker-threads orchestrator)))))
+           (list :success-p (tool-result-success-p result)
+                 :details details
+                 :job-count (length jobs)
+                 :all-terminal-p (every #'task-job-terminal-p jobs)
+                 :heavy-references-cleared-p
+                 (every (lambda (job)
+                          (and (null (task-job-parent-agent job))
+                               (null
+                                (task-job-command-authorization-function job))
+                               (null (task-job-thread job))))
+                        jobs)
+                 :worker-count (length workers)
+                 :workers-alive-p (every #'thread-alive-p workers)
+                 :provider-worker-count
+                 (length (task-test-provider-threads provider))
+                 :provider-maximum-active
+                 (task-test-provider-maximum-active-count provider)
+                 :provider-request-count
+                 (task-test-provider-request-count provider)
+                 :artifacts-exist-p
+                 (every (lambda (job)
+                          (let ((path (getf (task-job-result job)
+                                           :output-path)))
+                            (and path (probe-file path))))
+                        jobs)
+                 :private-transcripts-p
+                 (every (lambda (job)
+                          (let ((path (getf (task-job-result job)
+                                           :conversation-file)))
+                            (and path (search "/tasks/" path))))
+                        jobs)
+                 :public-conversation-count
+                 (length (conversation-list configuration))
+                 :duration-ms
+                 (task--milliseconds-between started-at
+                                             (get-internal-real-time))))
+      (ignore-errors (tool-registry-close-runtime-state registry))
+      (uiop:delete-directory-tree root :validate t
+                                       :if-does-not-exist :ignore))))
+
+(-> test-task-scheduler () null)
+(defun test-task-scheduler ()
+  "Test bounded reusable workers, private artifacts, and nested help-join."
+  (let ((previous-concurrency (uiop:getenv "AUTOLITH_TASK_MAX_CONCURRENCY"))
+        (previous-runtime (uiop:getenv "AUTOLITH_TASK_MAX_RUNTIME_MS")))
+    (unwind-protect
+         (progn
+           (sb-posix:setenv "AUTOLITH_TASK_MAX_CONCURRENCY" "2" 1)
+           (sb-posix:setenv "AUTOLITH_TASK_MAX_RUNTIME_MS" "1000" 1)
+           (let* ((provider (make-instance 'task-test-provider
+                                           :mode :concurrent))
+                  (tasks
+                   (coerce
+                    (loop for index from 1 to 4
+                          collect (json-object
+                                   "agent" "task"
+                                   "task" (format nil "Return result ~D." index)))
+                    'vector))
+                  (observation
+                   (task-tests--run-scheduler-case
+                    provider
+                    (json-object "context" "Independent scheduler checks."
+                                 "tasks" tasks))))
+             (test-assert (getf observation :success-p)
+                          "a concurrent task batch succeeds")
+             (test-assert (= (getf observation :job-count) 4)
+                          "the scheduler retains every admitted job")
+             (test-assert (getf observation :all-terminal-p)
+                          "synchronous scheduler jobs are terminal on return")
+             (test-assert (getf observation :heavy-references-cleared-p)
+                          "terminal jobs release live agent capabilities")
+             (test-assert (= (getf observation :worker-count) 2)
+                          "the configured pool contains only two workers")
+             (test-assert (getf observation :workers-alive-p)
+                          "reusable workers remain live until registry shutdown")
+             (test-assert (= (getf observation :provider-worker-count) 2)
+                          "four children reuse the bounded worker pair")
+             (test-assert (= (getf observation :provider-maximum-active) 2)
+                          "the pool executes up to its configured concurrency")
+             (test-assert (getf observation :artifacts-exist-p)
+                          "every terminal child publishes one unique artifact")
+             (test-assert (getf observation :private-transcripts-p)
+                          "child transcripts live in the private task tree")
+             (test-assert (zerop (getf observation
+                                       :public-conversation-count))
+                          "private child transcripts stay out of conversation lists"))
+           (sb-posix:setenv "AUTOLITH_TASK_MAX_CONCURRENCY" "1" 1)
+           (let* ((provider (make-instance 'task-test-provider :mode :nested))
+                  (observation
+                   (task-tests--run-scheduler-case
+                    provider
+                    (json-object "agent" "task"
+                                 "task" "Delegate once, then return."))))
+             (test-assert (getf observation :success-p)
+                          "a nested synchronous task succeeds at concurrency one")
+             (test-assert (= (getf observation :job-count) 2)
+                          "nested execution retains parent and leaf jobs")
+             (test-assert (= (getf observation :provider-request-count) 3)
+                          "nested help-join resumes the parent after the leaf")
+             (test-assert (= (getf observation :provider-worker-count) 1)
+                          "nested synchronous work reuses its parent's worker")
+             (test-assert (< (getf observation :duration-ms) 1000)
+                          "nested help-join avoids a concurrency-one deadlock"))
+           (sb-posix:setenv "AUTOLITH_TASK_MAX_CONCURRENCY" "999" 1)
+           (let ((orchestrator (task-orchestrator-create)))
+             (test-assert
+              (= (task-orchestrator-maximum-concurrency orchestrator)
+                 +task-maximum-concurrency+)
+              "environment concurrency cannot exceed the hard pool cap")))
+      (if previous-concurrency
+          (sb-posix:setenv "AUTOLITH_TASK_MAX_CONCURRENCY"
+                          previous-concurrency 1)
+          (sb-posix:unsetenv "AUTOLITH_TASK_MAX_CONCURRENCY"))
+      (if previous-runtime
+          (sb-posix:setenv "AUTOLITH_TASK_MAX_RUNTIME_MS" previous-runtime 1)
+          (sb-posix:unsetenv "AUTOLITH_TASK_MAX_RUNTIME_MS"))))
   nil)
