@@ -353,8 +353,11 @@
     (unwind-protect
          (progn
            (with-open-file
-               (stream temporary :direction :output :if-exists :supersede
-		       :if-does-not-exist :create :external-format :utf-8)
+               (stream temporary
+                       :direction :output
+                       :if-exists :supersede
+                       :if-does-not-exist :create
+                       :external-format :utf-8)
              (with-standard-io-syntax
                (let ((*print-readably* t)
                      (*print-pretty* t)
@@ -507,10 +510,11 @@
                                            job))))
     (unwind-protect
          (let ((result
-		(agent-run-user-turn child (getf (task-job-item job) :task)
-                                     :observer observer :goal-context
-                                     (task-child-goal-context job
-                                                              configuration))))
-           (task--assemble-child-result job result child conversation
-					completion))
+                 (agent-run-user-turn
+                  child
+                  (getf (task-job-item job) :task)
+                  :observer observer
+                  :goal-context (task-child-goal-context job configuration))))
+           (task--assemble-child-result
+            job result child conversation completion))
       (ignore-errors (lisp-worker-pool-stop-all worker)))))

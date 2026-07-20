@@ -16,8 +16,8 @@
             do (handler-case
                    (let ((decoded (json-decode trimmed)))
                      (if (stringp decoded)
-			 (setf current decoded)
-			 (return current)))
+                         (setf current decoded)
+                         (return current)))
                  (error nil (return current))) else return current
             finally (return current))))
 

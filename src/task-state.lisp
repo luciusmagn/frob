@@ -106,18 +106,26 @@
    (status :initform :queued :accessor task-progress-status :type
            keyword :documentation
            "The queued, running, completed, failed, or aborted state.")
-   (current-tool :initform nil :accessor task-progress-current-tool
-		 :type (option string) :documentation
-		 "The tool currently executing in the child.")
-   (recent-tools :initform nil :accessor task-progress-recent-tools
-		 :type list :documentation
-		 "The newest completed child tools, newest first.")
-   (output-tail :initform "" :accessor task-progress-output-tail :type
-		string :documentation
-		"The bounded tail of streamed assistant text.")
-   (request-count :initform 0 :accessor task-progress-request-count
-		  :type (integer 0) :documentation
-		  "The provider requests started by the child.")
+   (current-tool
+    :initform nil
+    :accessor task-progress-current-tool
+    :type (option string)
+    :documentation "The tool currently executing in the child.")
+   (recent-tools
+    :initform nil
+    :accessor task-progress-recent-tools
+    :type list
+    :documentation "The newest completed child tools, newest first.")
+   (output-tail
+    :initform ""
+    :accessor task-progress-output-tail
+    :type string
+    :documentation "The bounded tail of streamed assistant text.")
+   (request-count
+    :initform 0
+    :accessor task-progress-request-count
+    :type (integer 0)
+    :documentation "The provider requests started by the child.")
    (usage :initform nil :accessor task-progress-usage :type t
           :documentation "The newest portable provider usage snapshot.")
    (started-at :initform nil :accessor task-progress-started-at :type t
@@ -220,9 +228,11 @@
    "Session-scoped child identity, concurrency, event, and job state."))
 
 (defclass task-job nil
-  ((orchestrator :initarg :orchestrator :reader task-job-orchestrator
-		 :type task-orchestrator :documentation
-		 "The session orchestrator owning this job.")
+  ((orchestrator
+    :initarg :orchestrator
+    :reader task-job-orchestrator
+    :type task-orchestrator
+    :documentation "The session orchestrator owning this job.")
    (identity
     :initarg :identity
     :reader task-job-identity
@@ -258,9 +268,12 @@
     :reader task-job-owner-identifiers
     :type list
     :documentation "The ancestor task identifiers authorized to inspect this job.")
-   (parent-call-id :initarg :parent-call-id :initform nil :reader
-			   task-job-parent-call-id :type (option string) :documentation
-			   "The task.run function call that created this child.")
+   (parent-call-id
+    :initarg :parent-call-id
+    :initform nil
+    :reader task-job-parent-call-id
+    :type (option string)
+    :documentation "The task.run function call that created this child.")
    (command-authorization-function
     :initarg :command-authorization-function
     :initform nil
@@ -303,9 +316,11 @@
     :accessor task-job-condition-report
     :type (option string)
     :documentation "The bounded report for an unexpected job failure.")
-   (cancellation-reason :initform nil :accessor
-			task-job-cancellation-reason :type (option keyword) :documentation
-			"The structured cancellation reason requested by a controller.")
+   (cancellation-reason
+    :initform nil
+    :accessor task-job-cancellation-reason
+    :type (option keyword)
+    :documentation "The structured cancellation reason requested by a controller.")
    (retained-p
     :initform nil
     :accessor task-job-retained-p
@@ -340,9 +355,11 @@
    (completion :initarg :completion :reader task-child-agent-completion
                :type task-completion :documentation
                "The required terminal yield state.")
-   (orchestrator :initarg :orchestrator :reader
-		 task-child-agent-orchestrator :type task-orchestrator
-		 :documentation "The shared session task orchestrator.")
+   (orchestrator
+    :initarg :orchestrator
+    :reader task-child-agent-orchestrator
+    :type task-orchestrator
+    :documentation "The shared session task orchestrator.")
    (job :initarg :job :reader task-child-agent-job :type task-job
         :documentation
         "The lifecycle and progress record for this child."))
