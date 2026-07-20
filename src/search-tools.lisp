@@ -43,6 +43,10 @@
   ()
   (:documentation "Search indexed contents for any of several literal patterns."))
 
+(defmethod tool-child-safe-p ((tool search-tool))
+  "Permit isolated indexed workspace searches inside child agents."
+  t)
+
 (-> search--library-path (configuration) (values pathname boolean))
 (defun search--library-path (configuration)
   "Return the fff library path and whether it is an explicit override."

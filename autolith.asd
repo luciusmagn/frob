@@ -59,6 +59,8 @@
                              (:file "self-exercise")
                              (:file "default-tools")
                              (:file "agent")
+                             (:file "task-contracts")
+                             (:file "task-agents")
                              (:file "tasks")
                              (:file "terminal")
                              (:file "terminal-style")

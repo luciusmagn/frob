@@ -174,8 +174,8 @@
                 condition)))
       (test-assert failure
                    "runtime closure reports the first cleanup failure")
-      (test-assert (equal (nreverse close-order) '(:failure :later))
-                   "runtime closure attempts later resources after a failure")))
+      (test-assert (equal (nreverse close-order) '(:later :failure))
+                   "runtime closure unwinds registrations and survives a failure")))
   nil)
 
 (-> test-workspace-tools () null)

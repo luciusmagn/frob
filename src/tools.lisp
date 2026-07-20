@@ -350,6 +350,29 @@
 (defgeneric tool-execute (tool context arguments)
   (:documentation "Execute TOOL with validated JSON ARGUMENTS inside CONTEXT."))
 
+(-> tool-decode-arguments (tool string) json-object)
+(defgeneric tool-decode-arguments (tool source)
+  (:documentation
+   "Decode one provider argument SOURCE according to TOOL's JSON requirements."))
+
+(defmethod tool-decode-arguments ((tool tool) source)
+  "Decode ordinary TOOL arguments with the application's default JSON policy."
+  (declare (ignore tool))
+  (json-decode source))
+
+(-> tool-child-safe-p (tool) boolean)
+(defgeneric tool-child-safe-p (tool)
+  (:documentation
+   "Return true when TOOL may cross the ordinary child-agent boundary."))
+
+(defmethod tool-child-safe-p ((tool tool))
+  "Keep tools unavailable to child agents unless their class opts in."
+  nil)
+
+(defmethod tool-child-safe-p ((tool lisp-tool))
+  "Permit disposable Lisp-worker tools inside child agents."
+  t)
+
 (-> tool-runtime-identity (tool) t)
 (defgeneric tool-runtime-identity (tool)
   (:documentation
@@ -403,12 +426,17 @@
     :documentation "Canonical dotted tool names mapped to tool objects."))
   (:documentation "The model-visible tools and their active dispatch objects."))
 
-(-> tool-registry--apply-runtime-operation (tool-registry function) null)
-(defun tool-registry--apply-runtime-operation (registry function)
-  "Call FUNCTION once per runtime, attempting all before signaling a failure."
+(-> tool-registry--apply-runtime-operation
+    (tool-registry function &key (:reverse-p boolean))
+    null)
+(defun tool-registry--apply-runtime-operation
+    (registry function &key reverse-p)
+  "Call FUNCTION once per runtime, optionally in reverse registration order."
   (let ((seen (make-hash-table :test #'eq))
         (first-failure nil))
-    (dolist (tool (tool-registry-tools registry))
+    (dolist (tool (if reverse-p
+                      (reverse (copy-list (tool-registry-tools registry)))
+                      (tool-registry-tools registry)))
       (let ((identity (tool-runtime-identity tool)))
         (when (and identity (not (gethash identity seen)))
           (setf (gethash identity seen) t)
@@ -423,8 +451,9 @@
 
 (-> tool-registry-close-runtime-state (tool-registry) null)
 (defun tool-registry-close-runtime-state (registry)
-  "Stop every distinct ephemeral tool runtime owned by REGISTRY."
-  (tool-registry--apply-runtime-operation registry #'tool-runtime-close))
+  "Stop runtimes in reverse registration order so dependents close first."
+  (tool-registry--apply-runtime-operation
+   registry #'tool-runtime-close :reverse-p t))
 
 (-> tool-registry-detach-runtime-state (tool-registry) null)
 (defun tool-registry-detach-runtime-state (registry)
@@ -500,7 +529,10 @@
               (error 'tool-error
                      :message (format nil "Unknown tool ~A." canonical-name)
                      :tool-name canonical-name))
-            (let ((arguments (json-decode (or (json-get call "arguments") "{}"))))
+            (let ((arguments
+                    (tool-decode-arguments
+                     tool
+                     (or (json-get call "arguments") "{}"))))
               (unless (json-object-p arguments)
                 (error 'tool-error
                        :message (format nil "Arguments for ~A are not a JSON object."

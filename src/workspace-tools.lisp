@@ -31,6 +31,30 @@
   ()
   (:documentation "Run one bounded external command in the workspace."))
 
+(defmethod tool-child-safe-p ((tool fs-read-tool))
+  "Permit bounded workspace reads inside child agents."
+  t)
+
+(defmethod tool-child-safe-p ((tool fs-view-image-tool))
+  "Permit native workspace image inspection inside child agents."
+  t)
+
+(defmethod tool-child-safe-p ((tool fs-list-tool))
+  "Permit bounded workspace directory listings inside child agents."
+  t)
+
+(defmethod tool-child-safe-p ((tool fs-write-tool))
+  "Permit workspace writes through the ordinary child capability boundary."
+  t)
+
+(defmethod tool-child-safe-p ((tool fs-edit-tool))
+  "Permit workspace edits through the ordinary child capability boundary."
+  t)
+
+(defmethod tool-child-safe-p ((tool shell-run-tool))
+  "Permit authorized workspace commands inside child agents."
+  t)
+
 
 ;;;; -- Workspace Constants --
 
