@@ -346,68 +346,16 @@ Each field is a plist containing :LABEL, :VALUE, and an optional :STYLE."
       (make-string width :initial-element #\Space)))
 
 
-(-> application--syntax-style (keyword) terminal-style)
-(defun application--syntax-style (category)
-  "Map a ColorLisp semantic CATEGORY onto Autolith's base terminal palette."
-  (case category
-    (:comment ':syntax-comment)
-    ((:keyword :macro) ':syntax-keyword)
-    (:string ':syntax-string)
-    ((:escape :special) ':syntax-escape)
-    ((:number :constant) ':syntax-number)
-    ((:type :namespace :builtin) ':syntax-type)
-    ((:function :method) ':syntax-function)
-    ((:property :attribute) ':syntax-property)
-    (:heading ':syntax-heading)
-    (:link ':syntax-link)
-    (otherwise ':plain)))
-
-
-(-> application--syntax-segments->lines (list) vector)
-(defun application--syntax-segments->lines (segments)
-  "Convert ColorLisp SEGMENTS into a vector of terminal-span rows."
-  (let ((rows nil)
-        (current nil))
-    (labels ((emit (style text start end)
-               "Append TEXT between START and END to the current styled row."
-               (when (< start end)
-                 (push (terminal-span style (subseq text start end)) current)))
-
-             (finish-row ()
-               "Finish the current row and begin another."
-               (push (nreverse current) rows)
-               (setf current nil)))
-      (dolist (segment segments)
-        (let ((text (segment-text segment))
-              (style (application--syntax-style
-                      (segment-category segment)))
-              (start 0))
-          (loop for newline = (position #\Newline text :start start)
-                while newline
-                do (emit style text start newline)
-                   (finish-row)
-                   (setf start (1+ newline))
-                finally (emit style text start (length text)))))
-      (finish-row))
-    (coerce (nreverse rows) 'vector)))
-
-
 (-> application--syntax-lines (string string) (option vector))
 (defun application--syntax-lines (text path)
   "Return syntax-highlighted display lines for TEXT at PATH, or NIL."
-  (handler-case
-      (let ((lines (application--display-lines text)))
-        (when lines
-          (let* ((source (format nil "~{~A~^~%~}" lines))
-                 (language (language-detect path :source source)))
-            (when language
-              (let ((highlighted
-                      (application--syntax-segments->lines
-                       (highlight-segments source :language language))))
-                (and (= (length highlighted) (length lines))
-                     highlighted))))))
-    (colorlisp-error ()
-      nil)))
+  (let ((lines (application--display-lines text)))
+    (when lines
+      (let* ((source (format nil "~{~A~^~%~}" lines))
+             (highlighted (syntax--highlight-lines source :pathname path)))
+        (and highlighted
+             (= (length highlighted) (length lines))
+             highlighted)))))
 
 (-> application--edit-line-row
     (keyword string &key (:width integer)

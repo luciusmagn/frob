@@ -68,6 +68,7 @@
                              (:file "task-tools")
                              (:file "terminal")
                              (:file "terminal-style")
+                             (:file "syntax-highlighting")
                              (:file "layout")
                              (:file "markdown")
                              (:file "stream-terminal")

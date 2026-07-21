@@ -66,7 +66,9 @@
   (:import-from #:colorlisp
                 #:colorlisp-error
                 #:highlight-segments
+                #:language
                 #:language-detect
+                #:language-find
                 #:native-library-path
                 #:segment-category
                 #:segment-text)

@@ -18,6 +18,11 @@
     :accessor markdown-renderer-code-line-number
     :type (integer 1)
     :documentation "The gutter number given to the next fenced code line.")
+   (code-language
+    :initform nil
+    :accessor markdown-renderer-code-language
+    :type (or null language)
+    :documentation "The resolved language of the open fenced code block.")
    (table-column-count
     :initform nil
     :accessor markdown-renderer-table-column-count
@@ -50,6 +55,8 @@
           (markdown-renderer-code-open-p renderer)
           (markdown-renderer-code-line-number copy)
           (markdown-renderer-code-line-number renderer)
+          (markdown-renderer-code-language copy)
+          (markdown-renderer-code-language renderer)
           (markdown-renderer-table-column-count copy)
           (markdown-renderer-table-column-count renderer)
           (markdown-renderer-table-column-widths copy)
@@ -177,6 +184,19 @@ within TEXT. Unpaired delimiters stay literal."
   (if (uiop:string-prefix-p "```" line)
       (values t (string-trim " `" (subseq line 3)))
       (values nil "")))
+
+(-> markdown--fence-language (string) (option language))
+(defun markdown--fence-language (information)
+  "Resolve the leading language tag from fenced-block INFORMATION."
+  (let ((trimmed (string-trim '(#\Space #\Tab) information)))
+    (and (plusp (length trimmed))
+         (language-find
+          (subseq trimmed 0
+                  (or (position-if (lambda (character)
+                                     (find character '(#\Space #\Tab)))
+                                   trimmed)
+                      (length trimmed)))
+          :errorp nil))))
 
 (-> markdown--leading-spaces (string) integer)
 (defun markdown--leading-spaces (line)
@@ -449,10 +469,19 @@ inline Markdown styling."
 
 (-> markdown--code-rows (markdown-renderer string) list)
 (defun markdown--code-rows (renderer line)
-  "Return fenced code LINE as gutter-numbered wrapped rows."
+  "Return fenced code LINE as syntax-highlighted, gutter-numbered rows."
   (multiple-value-bind (first-prefix continuation-prefix)
       (markdown--code-prefixes renderer)
-    (let* ((content-width (max 8 (- (markdown-renderer-width renderer) 8)))
+    (let* ((highlighted
+             (syntax--highlight-lines
+              line :language (markdown-renderer-code-language renderer)))
+           (line-spans
+             (or (and highlighted
+                      (= (length highlighted) 1)
+                      (aref highlighted 0))
+                 (and (plusp (length line))
+                      (list (terminal-span ':plain line)))))
+           (content-width (max 8 (- (markdown-renderer-width renderer) 8)))
            (rows nil)
            (cursor 0))
       (loop for row-text in (wrap-text line content-width)
@@ -464,7 +493,10 @@ inline Markdown styling."
                                    first-prefix
                                    continuation-prefix)
                                (when (plusp (length row-text))
-                                 (list (terminal-span ':plain row-text))))
+                                 (syntax--spans-subseq
+                                  line-spans
+                                  start
+                                  (+ start (length row-text)))))
                        rows)
                  (setf cursor (+ start (length row-text)))))
       (incf (markdown-renderer-code-line-number renderer))
@@ -499,14 +531,17 @@ inline Markdown styling."
     (cond
       ((and (markdown-renderer-code-open-p renderer) fence-p)
        (markdown--reset-table renderer)
-       (setf (markdown-renderer-code-open-p renderer) nil)
+       (setf (markdown-renderer-code-open-p renderer) nil
+             (markdown-renderer-code-language renderer) nil)
        (list (list (terminal-span ':dim "  ```"))))
       ((markdown-renderer-code-open-p renderer)
        (markdown--code-rows renderer line))
       (fence-p
        (markdown--reset-table renderer)
        (setf (markdown-renderer-code-open-p renderer) t
-             (markdown-renderer-code-line-number renderer) 1)
+             (markdown-renderer-code-line-number renderer) 1
+             (markdown-renderer-code-language renderer)
+             (markdown--fence-language language))
        (list (list (terminal-span ':dim (format nil "  ```~A" language)))))
       ((zerop (length (string-trim " " line)))
        (markdown--reset-table renderer)

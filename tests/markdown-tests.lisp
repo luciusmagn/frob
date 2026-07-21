@@ -7,6 +7,16 @@
   "Return ROW's concatenated visible text."
   (apply #'concatenate 'string (mapcar #'terminal-span-text row)))
 
+(-> markdown-tests--syntax-span-p (cons) boolean)
+(defun markdown-tests--syntax-span-p (span)
+  "Return true when SPAN carries one of Autolith's semantic syntax styles."
+  (not
+   (null
+    (member (terminal-span-style span)
+            '(:syntax-comment :syntax-keyword :syntax-string :syntax-escape
+              :syntax-number :syntax-type :syntax-function :syntax-property
+              :syntax-heading :syntax-link)))))
+
 
 ;;;; -- Focused Markdown Tests --
 
@@ -107,7 +117,7 @@
 
 (-> test-markdown-code-blocks () null)
 (defun test-markdown-code-blocks ()
-  "Test fenced code blocks with dim numbered gutters and state resets."
+  "Test fenced code blocks with syntax, numbered gutters, and state resets."
   (let ((renderer (markdown-renderer-create :width 40)))
     (test-assert (string= (markdown-tests--row-text
                            (first (markdown-render-line renderer "```lisp")))
@@ -136,6 +146,37 @@
                            (first (markdown-render-line renderer "(new)")))
                           "    1 │ (new)")
                  "a new fence restarts line numbering"))
+  (dolist (case '(("rust" "fn main() { let answer: i32 = 42; }")
+                  ("c" "int main(void) { return 0; }")
+                  ("lisp" "(defun answer () 42)")
+                  ("go" "package main")))
+    (destructuring-bind (language source) case
+      (let ((renderer (markdown-renderer-create :width 80)))
+        (markdown-render-line renderer (format nil "```~A" language))
+        (let ((row (first (markdown-render-line renderer source))))
+          (test-assert
+           (some #'markdown-tests--syntax-span-p row)
+           (format nil "the ~A fence applies semantic syntax highlighting"
+                   language))))))
+  (dolist (fence '("```" "```unsupported-language"))
+    (let ((renderer (markdown-renderer-create :width 40)))
+      (markdown-render-line renderer fence)
+      (let ((row (first (markdown-render-line renderer "plain source"))))
+        (test-assert
+         (find (terminal-span ':plain "plain source") row :test #'equal)
+         "untagged and unsupported fences remain plain"))))
+  (let ((renderer (markdown-renderer-create :width 24)))
+    (markdown-render-line renderer "```rust title=example")
+    (let ((rows (markdown-render-line
+                 renderer
+                 "fn remarkably_long_function_name() { 42 }")))
+      (test-assert
+       (and (> (length rows) 1)
+            (every (lambda (row)
+                     (<= (text-cell-width (markdown-tests--row-text row)) 24))
+                   rows)
+            (some #'markdown-tests--syntax-span-p (apply #'append rows)))
+       "wrapped code keeps syntax spans and honors the renderer width")))
   nil)
 
 (-> test-markdown-tables () null)
@@ -228,19 +269,26 @@
                                           committed))))
            "paired delimiters never leak into committed scrollback")))))
   (let ((renderer (markdown-renderer-create :width 40)))
-    (markdown-render-line renderer "```")
+    (markdown-render-line renderer "```rust")
     (multiple-value-bind (rows tail retained)
-        (markdown-render-partial renderer "(partial")
+        (markdown-render-partial renderer "fn partial() { 42 }")
       (test-assert (null rows)
                    "short partial code lines commit nothing")
-      (test-assert (search "1 │ (partial" (markdown-tests--row-text tail))
+      (test-assert (search "1 │ fn partial" (markdown-tests--row-text tail))
                    "the code tail previews its upcoming line number")
-      (test-assert (string= retained "(partial")
-                   "partial code lines stay pending"))
+      (test-assert (string= retained "fn partial() { 42 }")
+                   "partial code lines stay pending")
+      (test-assert (and (find (terminal-span ':syntax-keyword "fn")
+                              tail
+                              :test #'equal)
+                        (find (terminal-span ':syntax-number "42")
+                              tail
+                              :test #'equal))
+                   "partial code previews retain the fence language"))
     (test-assert (string= (markdown-tests--row-text
                            (first (markdown-render-line renderer
-                                                        "(partial code)")))
-                          "    1 │ (partial code)")
+                                                        "fn committed() {}")))
+                          "    1 │ fn committed() {}")
                  "completed code lines number from the preserved counter"))
   nil)
 
