@@ -221,7 +221,9 @@ an active turn, a neutral full-width status background carries the current
 model, effort, and enclosing Git branch. The branch is captured at activity
 transitions and never queried by the animation repaint loop. Ctrl-C at
 an empty prompt exits and leaves a paste-ready resume command in scrollback only
-when the active conversation is durable.
+when the active conversation is durable. The input reader remains available
+during graceful interruption so another Ctrl-C can restore the terminal and
+force process status 130 without waiting for the main agent thread.
 
 ** =responsive-input.lisp=
 

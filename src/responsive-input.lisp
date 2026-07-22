@@ -86,6 +86,55 @@
   (:documentation
    "Ephemeral terminal input and FIFO submission state for one application run."))
 
+(define-constant +application-forced-interrupt-status+ 130
+  :documentation "The process status used when repeated Ctrl-C forces exit.")
+
+(defvar *application-forced-exit-function*
+  (lambda (status)
+    (sb-ext:exit :code status :abort t))
+  "The process termination boundary used after repeated Ctrl-C.")
+
+(-> application--resume-command (application) string)
+(defun application--resume-command (application)
+  "Return the shell command that resumes APPLICATION's exact conversation."
+  (format nil "autolith resume ~A"
+          (uiop:escape-shell-token
+           (conversation-identifier
+            (application-conversation application)))))
+
+(-> application-input-controller--force-interrupt-exit
+    (application-input-controller)
+    null)
+(defun application-input-controller--force-interrupt-exit (controller)
+  "Restore the terminal, show resumption details, and force CONTROLLER to exit."
+  (unwind-protect
+       (ignore-errors
+         (let* ((application
+                  (application-input-controller-application controller))
+                (terminal
+                  (terminal-ui-terminal (application-ui application)))
+                (conversation
+                  (and (slot-boundp application 'conversation)
+                       (application-conversation application)))
+                (resume-command
+                  (and conversation
+                       (conversation-persisted-p conversation)
+                       (application--resume-command application))))
+           (terminal-stop terminal)
+           (terminal--write-safe-text
+            terminal
+            (if resume-command
+                (format nil
+                        "~%Ctrl-C pressed again; forcing Autolith to exit.~%~
+                         To resume this conversation, run:~%  ~A~%"
+                        resume-command)
+                (format nil
+                        "~%Ctrl-C pressed again; forcing Autolith to exit.~%")))
+           (terminal-flush terminal)))
+    (funcall *application-forced-exit-function*
+             +application-forced-interrupt-status+))
+  nil)
+
 (-> application-input--text ((or string user-message-input)) string)
 (defun application-input--text (input)
   "Return the editable text carried by INPUT."
@@ -452,7 +501,7 @@
     (application-input-controller)
     null)
 (defun application-input-controller--reader-loop (controller)
-  "Read and process terminal events until pause, exit, or reader failure."
+  "Read events until pause, failure, or a completed interrupt escalation."
   (let ((signal-backtrace nil))
     (handler-bind
         ((serious-condition
@@ -461,17 +510,46 @@
              (setf signal-backtrace (application-safe-backtrace)))))
       (handler-case
           (loop
-            (when
-                (with-lock-held ((application-input-controller-lock controller))
-                  (or (application-input-controller-stopping-p controller)
-                      (application-input-controller-reader-paused-p controller)))
-              (return))
-            (when (application-input-controller--input-ready-p controller)
-              (application-input-controller--process-event
-               controller
-               (application-read-terminal-event
-                (application-ui
-                 (application-input-controller-application controller))))))
+            (multiple-value-bind (stopping-p reader-paused-p exit-reason)
+                (with-lock-held
+                    ((application-input-controller-lock controller))
+                  (values
+                   (application-input-controller-stopping-p controller)
+                   (application-input-controller-reader-paused-p controller)
+                   (application-input-controller-exit-reason controller)))
+              (cond
+                (reader-paused-p
+                 (return))
+                (stopping-p
+                 (unless (eq exit-reason ':interrupt)
+                   (return))
+                 (let* ((application
+                          (application-input-controller-application controller))
+                        (terminal
+                          (terminal-ui-terminal (application-ui application))))
+                   (if (terminal-input-ready-p terminal)
+                       (case (terminal-read-event terminal)
+                         (:interrupt
+                          (application-input-controller--force-interrupt-exit
+                           controller))
+                         (:end-of-input
+                          (return)))
+                       (with-lock-held
+                           ((application-input-controller-lock controller))
+                         (unless
+                             (application-input-controller-reader-paused-p
+                              controller)
+                           (condition-wait
+                            (application-input-controller-condition-variable
+                             controller)
+                            (application-input-controller-lock controller)
+                            :timeout 0.02))))))
+                ((application-input-controller--input-ready-p controller)
+                 (application-input-controller--process-event
+                  controller
+                  (application-read-terminal-event
+                   (application-ui
+                    (application-input-controller-application controller))))))))
         (serious-condition (condition)
           (application-input-controller--record-failure
            controller condition signal-backtrace)))))

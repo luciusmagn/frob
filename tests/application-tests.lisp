@@ -641,6 +641,64 @@
                                     :if-does-not-exist :ignore))))
   nil)
 
+(-> test-repeated-interrupt-forces-exit () null)
+(defun test-repeated-interrupt-forces-exit ()
+  "Test that another Ctrl-C bypasses a pending graceful interruption."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation (conversation-create configuration
+                                            :identifier "force-resume"))
+         (terminal (make-instance 'scripted-terminal
+                                  :columns 80
+                                  :events (list :interrupt :interrupt)))
+         (ui (terminal-ui-create :terminal terminal))
+         (application
+           (make-instance 'application
+                          :configuration configuration
+                          :conversation conversation
+                          :provider nil
+                          :tool-registry (make-instance 'tool-registry)
+                          :worker nil
+                          :agent nil
+                          :ui ui))
+         (controller
+           (make-instance 'application-input-controller
+                          :application application
+                          :later-state (make-instance 'later-state)
+                          :pending-later-entries nil
+                          :main-thread (current-thread))))
+    (unwind-protect
+         (progn
+           (conversation-append-user-message conversation "preserve this work")
+           (setf (application-input-controller application) controller)
+           (let ((status
+                   (catch 'forced-exit
+                     (let ((*application-forced-exit-function*
+                             (lambda (value)
+                               (throw 'forced-exit value))))
+                       (with-terminal-ui (active-ui ui)
+                         (declare (ignore active-ui))
+                         (application-input-controller--reader-loop controller)))
+                     nil)))
+             (test-assert (= status +application-forced-interrupt-status+)
+                          "a repeated Ctrl-C forces process status 130")
+             (test-assert
+              (eq (application-input-controller-exit-reason controller)
+                  ':interrupt)
+              "the first Ctrl-C remains the graceful interrupt request")
+             (let ((output (recording-terminal-output terminal)))
+               (test-assert
+                (search "Ctrl-C pressed again; forcing Autolith to exit." output)
+                "forced interruption explains why Autolith is exiting")
+               (test-assert (search "autolith resume force-resume" output)
+                            "forced interruption preserves the exact resume command"))))
+      (ignore-errors (application-input-controller-stop controller))
+      (ignore-errors (terminal-ui-stop ui))
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-transcript-entries () null)
 (defun test-transcript-entries ()
   "Test styled transcript entry construction, wrapping, and output bounds."
@@ -2391,6 +2449,7 @@
   (test-compact-view-command)
   (test-command-permission-modes)
   (test-interrupt-resume-instruction)
+  (test-repeated-interrupt-forces-exit)
   (test-transcript-entries)
   (test-streaming-presentation)
   (test-provider-retry-presentation)

@@ -203,14 +203,6 @@
   (prog1 (terminal-ui-read-event ui)
     (terminal-ui-refresh-size ui #'application-pending-terminal-size)))
 
-(-> application--resume-command (application) string)
-(defun application--resume-command (application)
-  "Return the shell command that resumes APPLICATION's exact conversation."
-  (format nil "autolith resume ~A"
-          (uiop:escape-shell-token
-           (conversation-identifier
-            (application-conversation application)))))
-
 (-> application--present-resume-instruction (application) boolean)
 (defun application--present-resume-instruction (application)
   "Present APPLICATION's exact resume command when its conversation is durable."
@@ -293,9 +285,12 @@
                   application
                   (application-input-failed-original-condition condition)
                   (application-input-failed-backtrace condition)))))
-           (when (eq (application-input-controller-exit-reason input-controller)
-                     ':interrupt)
-             (application--present-resume-instruction application)))
+           (let ((exit-reason
+                   (application-input-controller-exit-reason input-controller)))
+             (application-input-controller-stop input-controller)
+             (setf input-controller nil)
+             (when (eq exit-reason ':interrupt)
+               (application--present-resume-instruction application))))
       (sb-sys:enable-interrupt sb-unix:sigwinch :default)
       (when input-controller
         (application-input-controller-stop input-controller))

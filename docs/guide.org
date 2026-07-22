@@ -211,6 +211,8 @@ commands that need modal terminal input are held in the editor until the current
 response finishes; nonmodal commands such as =/compact= retain responsive input
 while they run. Ctrl-C at an empty prompt cancels the active turn, discards
 queued messages, and prints the exact resume command for a durable conversation.
+If clean cancellation cannot finish, another Ctrl-C restores the terminal and
+forces Autolith to exit.
 
 A fresh conversation stays in memory until its first durable record. Starting
 Autolith and leaving without a message or other saved state creates no
@@ -219,7 +221,8 @@ conversation file and adds nothing to =/resume= or =/conversations=.
 =Ctrl-C= clears a nonempty input draft. At an empty prompt it exits Autolith;
 when the conversation is durable, shutdown prints the exact
 =autolith resume ID= command that reopens it. Empty conversations produce no
-resume instruction.
+resume instruction. Pressing Ctrl-C again while shutdown is pending forces exit
+with status 130 and repeats the durable resume command before leaving.
 
 Long agent turns are allowed to continue well beyond eight tool batches. Autolith
 continues provider and tool rounds until the model finishes, the user interrupts,

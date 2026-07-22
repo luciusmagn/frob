@@ -909,7 +909,9 @@ and exact cancellation.
 
 Ctrl-C with an empty input exits the interface. When the active conversation
 has durable records, shutdown displays the exact command that resumes its
-identifier. An empty conversation has no resume command.
+identifier. An empty conversation has no resume command. While graceful
+cancellation is pending, another Ctrl-C restores the terminal, prints the
+durable resume command when one exists, and forces exit with status 130.
 
 The startup mark uses a green gradient during ordinary startup and a red
 gradient when the recovery component starts the active process. Terminals
