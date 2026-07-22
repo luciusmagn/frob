@@ -583,7 +583,10 @@
                          "status metadata names the model, effort, and branch"))
           (test-assert
            (search (terminal-style-sequence ':status-model t) display)
-           "the styled status row uses its indexed neutral background")))))
+           "the styled status row uses its indexed neutral background")
+          (test-assert
+           (search (terminal-style-sequence ':status-dim t) display)
+           "neutral status text uses its readable indexed style")))))
   (let* ((columns 96)
          (terminal (make-instance 'recording-terminal :columns columns))
          (ui (terminal-ui-create :terminal terminal)))
@@ -1164,6 +1167,13 @@
         (string= (terminal-style-sequence :status-model nil)
                  (format nil "~C[1;96;40m" +terminal-escape-character+)))
    "status text keeps a base color over indexed and basic neutral backgrounds")
+  (test-assert
+   (and (string= (terminal-style-sequence :status-dim t)
+                 (format nil "~C[37;48;5;236m"
+                         +terminal-escape-character+))
+        (string= (terminal-style-sequence :status-dim nil)
+                 (format nil "~C[37;40m" +terminal-escape-character+)))
+   "neutral status text stays readable without terminal-dependent faint color")
   (test-assert
    (let ((cl-colorist:*color-level* ':indexed))
      (and (terminal-environment-indexed-color-p)

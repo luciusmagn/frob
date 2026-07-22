@@ -66,7 +66,7 @@
                              :bold t)))
    (loop for (name foreground arguments) in
          '((:status-plain :bright-white ())
-           (:status-dim :white (:faint t))
+           (:status-dim :white ())
            (:status-accent :bright-magenta (:bold t))
            (:status-model :bright-cyan (:bold t))
            (:status-effort :bright-yellow (:bold t))
