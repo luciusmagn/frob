@@ -102,31 +102,138 @@
 
 ;;;; -- Interactive Command Table --
 
-(define-constant +application-commands+
-  '((:name "/help"          :argument nil :description "show this reference")
-    (:name "/new"           :argument nil :description "start a new conversation")
-    (:name "/resume"        :argument nil :description "pick a saved conversation to resume")
-    (:name "/conversations" :argument nil :description "list saved conversations")
-    (:name "/cwd"           :argument "PATH" :description "change the active workspace")
-    (:name "/auth"          :argument nil :description "authenticate Autolith with ChatGPT")
-    (:name "/model"         :argument nil
-     :description "pick the 5.6 model and reasoning effort")
-    (:name "/effort"        :argument nil :description "pick the reasoning effort")
-    (:name "/trace"         :argument "on|off" :description "show visible reasoning summaries")
-    (:name "/permissions"   :argument nil :description "choose command access for this session")
-    (:name "/later"         :argument "INPUT" :description "run input after rate limits reset")
-    (:name "/goal"          :argument "OBJECTIVE" :description "set or view the session goal")
-    (:name "/agenda"        :argument nil :description "show workspace agenda entries")
-    (:name "/checkpoint"    :argument nil :description "save a retained live generation")
-    (:name "/generations"   :argument nil :description "list retained generations")
-    (:name "/rollback"      :argument nil :description "pick a generation for recovery")
-    (:name "/status"        :argument nil :description "show usage and rate limits")
-    (:name "/context"       :argument nil :description "inspect request-local context")
-    (:name "/compact"       :argument "on|off"
-     :description "hide routine results, or summarize with no argument")
-    (:name "/quit"          :argument nil :description "leave Autolith"))
-  :test #'equal
-  :documentation "The interactive commands offered by completion and /help.")
+(defmacro define-application-commands (&body commands)
+  "Define literal COMMANDS after validating their user-facing metadata.
+
+Each command requires a non-empty :TIP at macro expansion time. Optional
+:ALIASES share the canonical command's behavior and tip without entering
+completion or help output."
+  (labels ((non-empty-literal-string-p (value)
+             "Return true when VALUE is a non-blank literal string."
+             (and (stringp value)
+                  (plusp
+                   (length
+                    (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                 value)))))
+
+           (command-identifiers (command)
+             "Return COMMAND's canonical name followed by its aliases."
+             (cons (getf command :name) (getf command :aliases)))
+
+           (command-identifier-p (value)
+             "Return true when VALUE is a normalized slash command."
+             (and (non-empty-literal-string-p value)
+                  (char= (char value 0) #\/)
+                  (string= value (string-downcase value)))))
+    (unless commands
+      (error "At least one application command must be defined."))
+    (let ((seen-identifiers nil))
+      (dolist (command commands)
+        (unless (and (listp command) (evenp (length command)))
+          (error "Application command ~S is not a literal property list."
+                 command))
+        (let ((name (getf command :name))
+              (aliases (getf command :aliases))
+              (tip (getf command :tip)))
+          (unless (command-identifier-p name)
+            (error "Application command ~S needs a lowercase slash-prefixed literal name."
+                   command))
+          (unless (and (listp aliases)
+                       (every #'command-identifier-p aliases))
+            (error "Application command ~A has invalid literal aliases." name))
+          (unless (non-empty-literal-string-p tip)
+            (error "Application command ~A requires a non-empty literal :TIP."
+                   name))
+          (dolist (identifier (command-identifiers command))
+            (when (member identifier seen-identifiers :test #'string=)
+              (error "Application command identifier ~A is defined twice."
+                     identifier))
+            (push identifier seen-identifiers)))))
+    `(define-constant +application-commands+
+       ',commands
+       :test #'equal
+       :documentation "Canonical interactive commands, aliases, help, and tips.")))
+
+(define-application-commands
+  (:name "/help" :argument nil
+   :description "show this reference"
+   :tip "shows every interactive command.")
+  (:name "/new" :argument nil
+   :description "start a new conversation"
+   :tip "starts fresh without deleting the current conversation.")
+  (:name "/resume" :argument nil
+   :description "pick a saved conversation to resume"
+   :tip "returns to a saved conversation from this workspace or another one.")
+  (:name "/conversations" :argument nil
+   :description "list saved conversations"
+   :tip "lists saved conversations from newest to oldest.")
+  (:name "/cwd" :argument "PATH"
+   :description "change the active workspace"
+   :tip "moves the active workspace without restarting Autolith.")
+  (:name "/auth" :argument nil
+   :description "authenticate Autolith with ChatGPT"
+   :tip "starts direct ChatGPT authentication when credentials need attention.")
+  (:name "/model" :argument nil
+   :description "pick the 5.6 model and reasoning effort"
+   :tip "changes both the model and its reasoning effort.")
+  (:name "/effort" :argument nil
+   :description "pick the reasoning effort"
+   :tip "changes reasoning effort without switching models.")
+  (:name "/trace" :argument "on|off"
+   :description "show visible reasoning summaries"
+   :tip "toggles visible reasoning summaries with on or off.")
+  (:name "/permissions" :argument nil
+   :description "choose command access for this session"
+   :tip "chooses how shell commands are authorized for this session.")
+  (:name "/later" :argument "INPUT"
+   :description "run input after rate limits reset"
+   :tip "queues a prompt for the next known rate-limit reset.")
+  (:name "/goal" :argument "OBJECTIVE"
+   :description "set or view the session goal"
+   :tip "sets the objective Autolith should pursue across continuations.")
+  (:name "/agenda" :argument nil
+   :description "show workspace agenda entries"
+   :tip "shows durable commitments and notes for the current workspace.")
+  (:name "/checkpoint" :argument nil
+   :description "save a retained live generation"
+   :tip "saves the current live state as a retained generation.")
+  (:name "/generations" :argument nil
+   :description "list retained generations"
+   :tip "shows live generations available for recovery.")
+  (:name "/rollback" :argument nil
+   :description "pick a generation for recovery"
+   :tip "selects a retained generation for the next recovery start.")
+  (:name "/status" :argument nil :aliases ("/usage")
+   :description "show usage and rate limits"
+   :tip "shows the model, context usage, and subscription rate limits.")
+  (:name "/context" :argument nil
+   :description "inspect request-local context"
+   :tip "reveals the ephemeral context prepared for provider requests.")
+  (:name "/compact" :argument "on|off"
+   :description "hide routine results, or summarize with no argument"
+   :tip "toggles routine result visibility; with no argument it compacts context.")
+  (:name "/quit" :argument nil :aliases ("/exit")
+   :description "leave Autolith"
+   :tip "exits cleanly; Ctrl-C also prints the exact resume command."))
+
+(-> application-command-entry (string) (option list))
+(defun application-command-entry (name)
+  "Return the canonical command entry matching NAME or one of its aliases."
+  (let ((normalized-name (string-downcase name)))
+    (find-if
+     (lambda (entry)
+       (or (string= normalized-name (getf entry :name))
+           (member normalized-name (getf entry :aliases) :test #'string=)))
+     +application-commands+)))
+
+(-> application-command-canonical-name (string) string)
+(defun application-command-canonical-name (name)
+  "Return NAME normalized through the canonical command and alias table."
+  (let* ((normalized-name (string-downcase name))
+         (entry (application-command-entry normalized-name)))
+    (if entry
+        (getf entry :name)
+        normalized-name)))
 
 
 ;;;; -- Construction and Reconnection --

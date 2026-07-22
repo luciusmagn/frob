@@ -190,6 +190,50 @@
 
 ;;;; -- Focused Presentation Tests --
 
+(-> test-application-command-tips () null)
+(defun test-application-command-tips ()
+  "Test command tips are mandatory metadata rendered with a styled command."
+  (test-assert
+   (every (lambda (entry)
+            (non-empty-string-p (getf entry :tip)))
+          +application-commands+)
+   "every canonical application command carries a non-empty tip")
+  (dolist (entry
+           '((:name "/missing-tip"
+              :argument nil
+              :description "omit the tip")
+             (:name "/blank-tip"
+              :argument nil
+              :description "leave the tip blank"
+              :tip "   ")))
+    (test-assert
+     (handler-case
+         (progn
+           (macroexpand-1 `(define-application-commands ,entry))
+           nil)
+       (error ()
+         t))
+     "missing and blank command tips fail during macro expansion"))
+  (test-assert
+   (and (string= (application-command-canonical-name "/EXIT") "/quit")
+        (string= (application-command-canonical-name "/usage") "/status"))
+   "declared aliases resolve through their canonical command definitions")
+  (test-assert (application--quit-command-p "/EXIT")
+               "quit detection follows the declared case-insensitive alias")
+  (let* ((entry (first +application-commands+))
+         (spans (application--command-tip-spans entry))
+         (command-span (third spans))
+         (tip-span (fourth spans)))
+    (test-assert (eq (terminal-span-style command-span) ':code)
+                 "the command token uses the colored code style")
+    (test-assert (string= (terminal-span-text command-span)
+                          (getf entry :name))
+                 "the colored span contains only the canonical command")
+    (test-assert (string= (terminal-span-text tip-span)
+                          (format nil " ~A" (getf entry :tip)))
+                 "the command's mandatory tip follows its colored token"))
+  nil)
+
 (-> test-application-banner-version () null)
 (defun test-application-banner-version ()
   "Test the Cosmic mark, adjacent metadata, narrow layout, and configured version."
@@ -209,6 +253,16 @@
                 (text (format nil "~{~A~}"
                               (mapcar #'terminal-span-text spans)))
                 (lines (uiop:split-string text :separator '(#\Newline)))
+                (tip-command-spans
+                  (remove-if-not
+                   (lambda (span)
+                     (eq (terminal-span-style span) ':code))
+                   spans))
+                (tip-command-span (first tip-command-spans))
+                (tip-entry
+                  (and tip-command-span
+                       (application-command-entry
+                        (terminal-span-text tip-command-span))))
                 (gradient-styles
                   (loop for span in spans
                         for style = (terminal-span-style span)
@@ -258,6 +312,12 @@
                         "the startup banner uses the configured version")
            (test-assert (not (search "v6.6.6" text))
                         "the startup banner contains no stale display version")
+           (test-assert (= (length tip-command-spans) 1)
+                        "the startup banner shows exactly one command tip")
+           (test-assert
+            (and tip-entry
+                 (search (getf tip-entry :tip) text))
+            "the startup banner pairs a registered command with its own tip")
            (let* ((immutable-configuration
                     (configuration--clone configuration :immutable-p t))
                   (immutable-application
@@ -273,11 +333,16 @@
              (test-assert (search "mode          immutable" immutable-text)
                           "the startup banner identifies immutable mode"))
            (let ((logo-end (search "YUMMM" text))
-                 (notice-start (search "Autolith executes" text)))
+                 (notice-start (search "Autolith executes" text))
+                 (tip-start (search "Tip: " text)))
              (test-assert (and logo-end
                                notice-start
                                (< logo-end notice-start))
-                          "the security notice follows the complete header"))
+                          "the security notice follows the complete header")
+             (test-assert (and notice-start
+                               tip-start
+                               (< notice-start tip-start))
+                          "the command tip appears below the security notice"))
            (setf (terminal-columns terminal) 40)
            (let* ((narrow-spans (application-banner application))
                   (narrow-text (format nil "~{~A~}"
@@ -288,7 +353,9 @@
              (test-assert (and logo-end
                                metadata-start
                                (< logo-end metadata-start))
-                          "narrow banners stack metadata below the AL mark")))
+                          "narrow banners stack metadata below the AL mark")
+             (test-assert (search "Tip: " narrow-text)
+                          "narrow startup banners retain their command tip")))
       (if previous-recovered
           (sb-posix:setenv "AUTOLITH_RECOVERED" previous-recovered 1)
           (sb-posix:unsetenv "AUTOLITH_RECOVERED"))
@@ -2316,6 +2383,7 @@
 (-> run-application-tests () boolean)
 (defun run-application-tests ()
   "Run focused application presentation tests and return true on success."
+  (test-application-command-tips)
   (test-application-banner-version)
   (test-thinking-label-selection)
   (test-application-status-details)

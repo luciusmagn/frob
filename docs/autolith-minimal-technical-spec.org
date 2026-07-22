@@ -915,6 +915,11 @@ The startup mark uses a green gradient during ordinary startup and a red
 gradient when the recovery component starts the active process. Terminals
 without indexed colors receive the corresponding solid bold basic color.
 
+Each startup banner includes one tip selected from the canonical interactive
+commands. The command token is colored separately from its explanation. Every
+canonical command definition carries a non-empty tip, and omitting it is a
+compile-time error. Declared aliases share their canonical command's tip.
+
 Decorative animations, excessive transitions, and visual spectacle are
 out of scope.
 

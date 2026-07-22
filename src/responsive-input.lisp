@@ -135,12 +135,13 @@
 (-> application--quit-command-p (string) boolean)
 (defun application--quit-command-p (input)
   "Return true when INPUT is the explicit quit or exit slash command."
-  (let ((command (string-downcase
-                  (or (first (uiop:split-string
-                              input
-                              :separator '(#\Space #\Tab)))
-                      ""))))
-    (not (null (member command '("/quit" "/exit") :test #'string=)))))
+  (let ((command
+          (application-command-canonical-name
+           (or (first (uiop:split-string
+                       input
+                       :separator '(#\Space #\Tab)))
+               ""))))
+    (string= command "/quit")))
 
 (-> application--command-needs-terminal-owner-p (string) boolean)
 (defun application--command-needs-terminal-owner-p (input)
@@ -148,7 +149,8 @@
   (let* ((parts (remove-if-not
                  #'non-empty-string-p
                  (uiop:split-string input :separator '(#\Space #\Tab))))
-         (command (string-downcase (or (first parts) "")))
+         (command
+           (application-command-canonical-name (or (first parts) "")))
          (argument (second parts)))
     (or (not (null (member command '("/auth" "/model") :test #'string=)))
         (and (null argument)

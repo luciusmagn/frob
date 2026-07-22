@@ -858,16 +858,17 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
   (let* ((parts (remove-if-not
                  #'non-empty-string-p
                  (uiop:split-string input :separator '(#\Space #\Tab))))
-         (command (string-downcase (or (first parts) "")))
+         (command
+           (application-command-canonical-name (or (first parts) "")))
          (argument (second parts))
          (configuration (application-configuration application)))
     (cond
-      ((member command '("/quit" "/exit") :test #'string=)
+      ((string= command "/quit")
        :quit)
       ((string= command "/help")
        (application-present application (application-help))
        :continue)
-      ((member command '("/status" "/usage") :test #'string=)
+      ((string= command "/status")
        (application-present application (application-status-entry application))
        :continue)
       ((string= command "/context")

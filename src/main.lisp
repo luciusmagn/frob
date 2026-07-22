@@ -134,9 +134,23 @@
          append (application--banner-terminate-row
                  (terminal--clip-spans metadata-row columns)))))
 
+(-> application--startup-command-entry () list)
+(defun application--startup-command-entry ()
+  "Return one command entry selected for the startup banner."
+  (nth (random (length +application-commands+))
+       +application-commands+))
+
+(-> application--command-tip-spans (list) terminal-styled-text)
+(defun application--command-tip-spans (entry)
+  "Return a startup tip with ENTRY's command token styled as code."
+  (list (terminal-span :plain (format nil "~2%"))
+        (terminal-span :dim "Tip: ")
+        (terminal-span :code (getf entry :name))
+        (terminal-span :plain (format nil " ~A" (getf entry :tip)))))
+
 (-> application-banner (application) list)
 (defun application-banner (application)
-  "Return APPLICATION's styled identity, session metadata, and security notice."
+  "Return APPLICATION's identity, session metadata, security notice, and tip."
   (let* ((columns (application--banner-columns application))
          (metadata-width
            (- columns
@@ -161,7 +175,9 @@
       (terminal-span
        :notice
        (format nil "~%Autolith executes model-generated code with your user ~
-                    privileges.~%Sandboxing is no substitute for human oversight"))))))
+                    privileges.~%Sandboxing is no substitute for human oversight")))
+     (application--command-tip-spans
+      (application--startup-command-entry)))))
 
 (-> application-handle-expected-error (application autolith-error) null)
 (defun application-handle-expected-error (application condition)
