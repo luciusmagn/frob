@@ -380,6 +380,23 @@
   ()
   (:documentation "Conversation persistence or replay violated a critical invariant."))
 
+(define-condition conversation-identifier-error (autolith-error)
+  ((value
+    :initarg :value
+    :reader conversation-identifier-error-value
+    :type t
+    :documentation "The value that could not be parsed as a conversation identifier."))
+  (:documentation "A displayed or stored conversation identifier is invalid."))
+
+(define-condition conversation-identifier-space-exhausted (conversation-error)
+  ((timestamp
+    :initarg :timestamp
+    :reader conversation-identifier-space-exhausted-timestamp
+    :type timestamp
+    :documentation "The Universal Time for which every seed was occupied."))
+  (:documentation
+   "All 58 conversation identifier seeds were occupied for one second."))
+
 (define-condition memory-error (autolith-error)
   ((pathname
     :initarg :pathname

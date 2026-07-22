@@ -127,10 +127,12 @@
 (defun conversation-create (configuration &key identifier storage-root)
   "Create an in-memory conversation that persists under optional STORAGE-ROOT."
   (let* ((created-at (get-universal-time))
-         (conversation-id (or identifier (make-identifier)))
          (root (uiop:ensure-directory-pathname
                 (or storage-root
                     (configuration-conversation-root configuration))))
+         (conversation-id
+           (or identifier
+               (conversation-identifier-generate root :timestamp created-at)))
          (origin-directory (namestring
                             (configuration-working-directory configuration)))
          (pathname (merge-pathnames
@@ -757,7 +759,13 @@ conversation files."
 (-> conversation-pathname-for-id (configuration string) pathname)
 (defun conversation-pathname-for-id (configuration identifier)
   "Return CONFIGURATION's conversation pathname for IDENTIFIER."
-  (merge-pathnames (make-pathname :name identifier :type "sexp")
+  (merge-pathnames (make-pathname
+                    :name
+                    (handler-case
+                        (conversation-identifier-normalize identifier)
+                      (conversation-identifier-error ()
+                        identifier))
+                    :type "sexp")
                    (configuration-conversation-root configuration)))
 
 (-> conversation-load-by-id (configuration string) conversation)

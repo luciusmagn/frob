@@ -173,8 +173,9 @@
                                    "visible summaries"
                                    "hidden"))
      (application--field-spans "conversation"
-                               (conversation-identifier
-                                (application-conversation application)))
+                               (conversation-identifier-display
+                                (conversation-identifier
+                                 (application-conversation application))))
      (application--field-spans "workspace"
                                (or (application--abbreviated-directory
                                     (namestring
@@ -311,7 +312,7 @@
                 directory
                 current-directory))
              (item
-               (list :name identifier
+               (list :name (conversation-identifier-display identifier)
                      :argument nil
                      :group (if current-directory-p
                                 current-group
@@ -961,8 +962,9 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
        (application-present
         application
         (format nil "Started conversation ~A."
-                (conversation-identifier
-                 (application-conversation application))))
+                (conversation-identifier-display
+                 (conversation-identifier
+                  (application-conversation application)))))
        :continue)
       ((string= command "/resume")
        (let ((startup-offer-p

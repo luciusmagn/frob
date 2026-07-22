@@ -100,8 +100,9 @@
   "Return the shell command that resumes APPLICATION's exact conversation."
   (format nil "autolith resume ~A"
           (uiop:escape-shell-token
-           (conversation-identifier
-            (application-conversation application)))))
+           (conversation-identifier-display
+            (conversation-identifier
+             (application-conversation application))))))
 
 (-> application-input-controller--force-interrupt-exit
     (application-input-controller)

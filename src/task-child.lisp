@@ -324,7 +324,9 @@
   "Return JOB's private transcript and artifact directory."
   (merge-pathnames
    (format nil "tasks/~A/~A/"
-           (or (task--identifier-fragment
+           (or (conversation-identifier-path-fragment
+                (task-job-root-conversation-identifier job))
+               (task--identifier-fragment
                 (task-job-root-conversation-identifier job))
                "conversation")
            (task-job-execution-identifier job))
@@ -473,7 +475,6 @@
          (conversation
           (conversation-create
            configuration
-           :identifier (task-job-execution-identifier job)
            :storage-root (task--artifact-root configuration job)))
          (worker (lisp-worker-pool-create configuration))
          (completion (make-instance 'task-completion))

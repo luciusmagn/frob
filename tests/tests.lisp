@@ -89,6 +89,7 @@
     (test-system-prompt-context)
     (test-request-local-context)
     (test-project-adaptations)
+    (test-conversation-identifiers)
     (test-conversation-persistence)
     (test-conversation-private-storage)
     (test-conversation-origin-directory)

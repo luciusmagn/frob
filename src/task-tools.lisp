@@ -265,7 +265,8 @@
   "Return the common artifact root for one primary conversation."
   (merge-pathnames
    (format nil "tasks/~A/"
-           (or (task--identifier-fragment conversation-identifier)
+           (or (conversation-identifier-path-fragment conversation-identifier)
+               (task--identifier-fragment conversation-identifier)
                "conversation"))
    (configuration-data-root configuration)))
 
