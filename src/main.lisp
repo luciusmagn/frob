@@ -178,7 +178,7 @@
        (format nil "~%Autolith executes model-generated code with your user ~
                     privileges.~%Sandboxing is no substitute for human oversight")))
      (application--command-tip-spans
-     (application--startup-command-entry)))))
+      (application--startup-command-entry)))))
 
 (-> application--update-notice (application) (option list))
 (defun application--update-notice (application)
@@ -346,9 +346,10 @@
                     (let ((provenance
                             (application-installation-provenance application)))
                       (when provenance
-                        (update-check-start
-                         (application-configuration application)
-                         provenance)))
+                        (setf (application-update-check-thread application)
+                              (update-check-start
+                               (application-configuration application)
+                               provenance))))
                     (dolist (failure
                              (application-overlay-failures application))
                       (application-present
@@ -376,7 +377,10 @@
                     (let ((*checkpoint-thread-quiescer*
                             (lambda (function)
                               (application-input-controller-call-with-reader-paused
-                               input-controller function)))
+                               input-controller
+                               (lambda ()
+                                 (application--quiesce-update-check application)
+                                 (funcall function)))))
                           (*debugger-hook*
                             (lambda (condition hook)
                               (declare (ignore hook))

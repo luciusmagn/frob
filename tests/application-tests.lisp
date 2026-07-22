@@ -510,7 +510,17 @@
                (test-assert
                 (and (search "Installed through Nix" text)
                      (search "flake or profile" text))
-                "Nix receives package-manager advice without an update action")))
+                "Nix receives package-manager advice without an update action"))
+
+             (let* ((application (make-instance 'application))
+                    (thread (make-thread (lambda () (sleep 0.01))
+                                         :name "Autolith update check test")))
+               (setf (application-update-check-thread application) thread)
+               (application--quiesce-update-check application)
+               (test-assert
+                (and (null (application-update-check-thread application))
+                     (not (thread-alive-p thread)))
+                "checkpoint quiescence joins the background update check")))
         (uiop:delete-directory-tree root
                                     :validate t
                                     :if-does-not-exist :ignore))))

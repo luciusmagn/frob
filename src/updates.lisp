@@ -492,9 +492,9 @@
 
 (-> update-check-start
     (configuration installation-provenance)
-    boolean)
+    t)
 (defun update-check-start (configuration provenance)
-  "Start one due background availability refresh for release or Nix installs."
+  "Start one due background availability refresh, returning its thread or NIL."
   (block nil
     (when (or (eq (installation-provenance-method provenance) ':source)
               (string= (or (uiop:getenv "AUTOLITH_NO_UPDATE_CHECK") "") "1"))
@@ -514,7 +514,6 @@
                       configuration now (update-check--fetch))
                    (serious-condition ()
                      nil))))
-             :name "Autolith release availability")
-            t)
+             :name "Autolith release availability"))
         (serious-condition ()
           nil)))))

@@ -52,6 +52,8 @@ Owns structurally validated source, Nix, and selected-release provenance; the
 atomic readable availability cache; exact-tag dismissal; and bounded background
 refresh. Startup reads only cached state. The background thread may publish a
 later result for a future start, but it has no installation authority.
+Checkpoint quiescence joins an unfinished refresh before the single-threaded
+fork boundary.
 
 ** =sexp-store= and =readable-state.lisp=
 

@@ -67,6 +67,11 @@
     :accessor application-update-availability
     :type (option update-availability)
     :documentation "The newer nondismissed release cached before startup.")
+   (update-check-thread
+    :initform nil
+    :accessor application-update-check-thread
+    :type t
+    :documentation "The bounded availability thread awaiting checkpoint quiescence.")
    (permission-state
     :initarg :permission-state
     :initform (make-instance 'permission-state)
@@ -493,6 +498,7 @@ completion or help output."
           (application-installation-provenance application)
           installation-provenance
           (application-update-availability application) update-availability
+          (application-update-check-thread application) nil
           (application-rendered-sequence application)
           (if (and recovery-rendered-sequence
                    (string= (conversation-identifier conversation)
@@ -507,6 +513,21 @@ completion or help output."
     (application--load-goal application)
     application))
 
+(-> application--quiesce-update-check (application) null)
+(defun application--quiesce-update-check (application)
+  "Join APPLICATION's bounded availability thread before a checkpoint fork."
+  (let ((thread (application-update-check-thread application)))
+    (when thread
+      (when (eq thread (current-thread))
+        (error 'checkpoint-error
+               :message "An update check cannot quiesce its own thread."
+               :stage ':fork
+               :pathname nil))
+      (join-thread thread)
+      (when (eq thread (application-update-check-thread application))
+        (setf (application-update-check-thread application) nil))))
+  nil)
+
 (defmethod checkpoint-detach-state ((application application))
   "Detach APPLICATION's ephemeral object graph in a checkpoint saver child."
   (context-runtime-reset)
@@ -516,7 +537,8 @@ completion or help output."
         (application-worker application) nil
         (application-agent application) nil
         (application-ui application) nil
-        (application-input-controller application) nil)
+        (application-input-controller application) nil
+        (application-update-check-thread application) nil)
   application)
 
 (-> application--install-configuration
