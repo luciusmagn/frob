@@ -31,13 +31,13 @@ let
   colorlispSource = pkgs.fetchFromGitHub {
     owner = "luciusmagn";
     repo = "colorlisp";
-    rev = "48b74e9b0b6aa98e443d766a07318741f74a3975";
-    hash = "sha256-lj4Q8amj1U8d9WFPRWrGchONqKQix/N4Qq5KKRm0HUo=";
+    rev = "6e1ee575bf57628fa864acd6f0a61209af9990b1";
+    hash = "sha256-4c/yexgk8hBsBk7pvTNKS79vGLKIeK6+vUcWvcqb5No=";
   };
 
   colorlispNativeLibrary = pkgs.stdenv.mkDerivation {
     pname = "colorlisp-tree-sitter";
-    version = "0.1.0";
+    version = "0.2.0";
     src = colorlispSource;
     dontConfigure = true;
     buildPhase = ''
@@ -49,8 +49,8 @@ let
         -o libcolorlisp-tree-sitter.so \
         native/colorlisp-tree-sitter.c \
         vendor/tree-sitter/src/lib.c \
-        $(find vendor/grammars -mindepth 2 -maxdepth 2 -name parser.c -print | sort) \
-        $(find vendor/grammars -mindepth 2 -maxdepth 2 -name scanner.c -print | sort)
+        $(find vendor/grammars -type f -name parser.c -print | sort) \
+        $(find vendor/grammars -type f -name scanner.c -print | sort)
       runHook postBuild
     '';
     installPhase = ''
@@ -63,7 +63,7 @@ let
 
   colorlisp = pkgs.sbcl.buildASDFSystem {
     pname = "colorlisp";
-    version = "0.1.0";
+    version = "0.2.0";
     src = colorlispSource;
     lispLibs = with pkgs.sbclPackages; [
       babel

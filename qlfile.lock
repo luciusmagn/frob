@@ -60,8 +60,8 @@
   :version "git-29c19b6bdb1d19e1ceb3ed5279eed5b81b0872d8"))
 ("colorlisp" .
  (:class qlot/source/git:source-git
-  :initargs (:remote-url "https://github.com/luciusmagn/colorlisp.git" :ref "48b74e9b0b6aa98e443d766a07318741f74a3975")
-  :version "git-48b74e9b0b6aa98e443d766a07318741f74a3975"))
+  :initargs (:remote-url "https://github.com/luciusmagn/colorlisp.git" :ref "6e1ee575bf57628fa864acd6f0a61209af9990b1")
+  :version "git-6e1ee575bf57628fa864acd6f0a61209af9990b1"))
 ("sexp-store" .
  (:class qlot/source/git:source-git
   :initargs (:remote-url "https://github.com/luciusmagn/sexp-store.git" :ref "92a2ad458e92ecf4526ccb9bb387f89283c4dcc3")

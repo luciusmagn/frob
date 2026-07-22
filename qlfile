@@ -13,6 +13,6 @@ git cl-colorist https://github.com/luciusmagn/cl-colorist.git :ref 91041f50af55f
 git clinedi https://github.com/luciusmagn/clinedi.git :ref ce2fbed15eeb5189b470bc1405f29ce3c2911f37
 git cl-exec-sandbox https://github.com/luciusmagn/cl-exec-sandbox.git :ref 8c47a1dadb64eba1629742ef6b43789ed7d73b36
 git clifff https://github.com/luciusmagn/clifff.git :ref 29c19b6bdb1d19e1ceb3ed5279eed5b81b0872d8
-git colorlisp https://github.com/luciusmagn/colorlisp.git :ref 48b74e9b0b6aa98e443d766a07318741f74a3975
+git colorlisp https://github.com/luciusmagn/colorlisp.git :ref 6e1ee575bf57628fa864acd6f0a61209af9990b1
 git sexp-store https://github.com/luciusmagn/sexp-store.git :ref 92a2ad458e92ecf4526ccb9bb387f89283c4dcc3
 git sbcl-workers https://github.com/luciusmagn/sbcl-workers.git :ref fff2bc4bbeb8eec93a963c5ad1f7af85bbf7a6a3
