@@ -1181,7 +1181,9 @@ related operations."
               (user-message-input-create :text "Select explicitly.")
               (lambda ()
                 (skill-select-for-logical-turn configuration "replaced")
-                (delete-file replaced-path)
+                (rename-file
+                 replaced-path
+                 (merge-pathnames "replaced/SKILL.original" skills))
                 (skill-tests--write
                  skills
                  "replaced/SKILL.sexp"
