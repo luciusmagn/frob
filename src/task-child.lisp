@@ -475,6 +475,7 @@
          (conversation
           (conversation-create
            configuration
+           :identifier (task-job-execution-identifier job)
            :storage-root (task--artifact-root configuration job)))
          (worker (lisp-worker-pool-create configuration))
          (completion (make-instance 'task-completion))

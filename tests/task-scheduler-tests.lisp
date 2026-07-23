@@ -1498,6 +1498,8 @@
                  (with-lock-held ((task-test-provider-lock provider))
                    (copy-list
                     (task-test-provider-conversation-identifiers provider)))
+                 :execution-identifiers
+                 (mapcar #'task-job-execution-identifier jobs)
                  :provider-request-count
                  (task-test-provider-request-count provider)
                  :scheduler-idle-p idle-p
@@ -1661,12 +1663,16 @@
              (test-assert (= (getf observation :provider-maximum-active) 2)
                           "the pool executes up to its configured concurrency")
              (let ((identifiers
-                     (getf observation :provider-conversation-identifiers)))
+                     (getf observation :provider-conversation-identifiers))
+                   (execution-identifiers
+                     (getf observation :execution-identifiers)))
                (test-assert
                 (and (= (length identifiers) 4)
                      (= (length (remove-duplicates identifiers :test #'string=))
-                        4))
-                "parallel children use distinct provider thread identities"))
+                        4)
+                     (equal (sort (copy-list identifiers) #'string<)
+                            (sort (copy-list execution-identifiers) #'string<)))
+                "parallel children use their unique execution identifiers as provider threads"))
              (test-assert (getf observation :artifacts-exist-p)
                           "every terminal child publishes one unique artifact")
              (test-assert (getf observation :private-transcripts-p)
