@@ -6,9 +6,9 @@ export HOME=/var/lib/autolith-release-server/home
 export XDG_DATA_HOME=$HOME/.local/share
 export XDG_STATE_HOME=$HOME/.local/state
 export XDG_CACHE_HOME=$HOME/.cache
-export AUTOLITH_RELEASE_SOURCE_ROOT=/srv/autolith-release-server/source
+export AUTOLITH_RELEASE_SOURCE_ROOT=/srv/autolith-release-server/current
 export AUTOLITH_RELEASE_STATE_ROOT=/var/lib/autolith-release-server/builder
 export AUTOLITH_RELEASE_PUBLIC_ROOT=/srv/autolith-release-server/public
 export AUTOLITH_RELEASE_POLL_SECONDS=300
 
-exec /srv/autolith-release-server/source/server/run build
+exec /srv/autolith-release-server/current/server/run build

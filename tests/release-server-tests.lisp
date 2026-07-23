@@ -19,6 +19,51 @@
   "Create one release source-tag fixture with NAME and COMMIT."
   (make-instance 'release-source-tag :name name :commit commit))
 
+(-> release-server-tests--git (pathname list) string)
+(defun release-server-tests--git (directory arguments)
+  "Run a quiet Git fixture command in DIRECTORY and return trimmed output."
+  (string-trim
+   '(#\Space #\Tab #\Newline #\Return)
+   (uiop:run-program
+    (append (list "git" "-C" (namestring directory)) arguments)
+    :output :string
+    :error-output :output)))
+
+(-> release-server-tests--git-deployment
+    (pathname string &key (:annotated-p boolean) (:updater-p boolean))
+    (values pathname release-source-tag))
+(defun release-server-tests--git-deployment
+    (root version &key annotated-p (updater-p t))
+  "Create one exact semantic Git deployment fixture below ROOT."
+  (let* ((tag (format nil "v~A" version))
+         (deployment (merge-pathnames (format nil "~A/" tag) root)))
+    (ensure-directories-exist (merge-pathnames ".keep" deployment))
+    (release-server-tests--write-file
+     (merge-pathnames "autolith.asd" deployment)
+     (format nil
+             "(asdf:defsystem #:autolith~%  :version \"~A\"~%)~%"
+             version))
+    (when updater-p
+      (release-server-tests--write-file
+       (merge-pathnames "server/release-updater.lisp" deployment)
+       "(in-package #:autolith)"))
+    (release-server-tests--git deployment '("init" "--quiet"))
+    (release-server-tests--git
+     deployment '("config" "user.name" "Autolith Release Test"))
+    (release-server-tests--git
+     deployment '("config" "user.email" "release-test@invalid"))
+    (release-server-tests--git deployment '("add" "."))
+    (release-server-tests--git
+     deployment '("commit" "--quiet" "-m" "Create release fixture"))
+    (if annotated-p
+        (release-server-tests--git
+         deployment (list "tag" "-a" tag "-m" "Annotated fixture"))
+        (release-server-tests--git deployment (list "tag" tag)))
+    (let ((commit
+            (release-server-tests--git deployment '("rev-parse" "HEAD"))))
+      (values deployment
+              (release-server-tests--source-tag tag commit)))))
+
 (-> test-release-server () null)
 (defun test-release-server ()
   "Test semantic release selection and strict HTTP routing."
@@ -35,7 +80,11 @@
             (merge-pathnames
              (format nil "autolith-release-server-tests-~A/" (make-identifier))
              (uiop:temporary-directory))))
-         (source-root (merge-pathnames "source/" root))
+         (source-root
+           (let ((pathname (merge-pathnames "source/" root)))
+             (ensure-directories-exist
+              (merge-pathnames ".keep" pathname))
+             pathname))
          (public-root (merge-pathnames "public/" root))
          (configuration
            (release-server-configuration-create
@@ -80,6 +129,29 @@
                       (release-server-route configuration "GET" "/health"))
                      (format nil "ok~%"))
             "health responses contain a real line ending")
+           (let* ((identity-configuration
+                    (release-server-configuration-create
+                     :source-root source-root
+                     :public-root public-root
+                     :address "127.0.0.1"
+                     :port 18098
+                     :source-tag "v0.16.1"
+                     :source-commit
+                     "0123456789abcdef0123456789abcdef01234567"))
+                  (matching
+                    (release-server-route
+                     identity-configuration "GET"
+                     "/health/v0.16.1/0123456789abcdef0123456789abcdef01234567"))
+                  (stale
+                    (release-server-route
+                     identity-configuration "GET"
+                     "/health/v0.16.0/0123456789abcdef0123456789abcdef01234567")))
+             (test-assert
+              (= (release-server-response-status matching) 200)
+              "source-specific health proves the restarted process identity")
+             (test-assert
+              (= (release-server-response-status stale) 404)
+              "source-specific health rejects a stale server identity"))
            (let ((response
                    (release-server-route configuration "GET" "/releases/latest")))
              (test-assert (= (release-server-response-status response) 302)
@@ -293,4 +365,283 @@
             (string= (release-builder--source-version source-root) "0.11.2")
             "builder source validation reads the declared ASDF version"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
-  nil)
+  (let* ((root
+           (uiop:ensure-directory-pathname
+            (merge-pathnames
+             (format nil "autolith-release-updater-tests-~A/"
+                     (make-identifier))
+             (uiop:temporary-directory))))
+         (deployments-root (merge-pathnames "deployments/" root))
+         (state-root (merge-pathnames "updater-state/" root))
+         (host-lock-root (merge-pathnames "builder-state/" root))
+         (selection-path (merge-pathnames "current" root))
+         (old-path nil)
+         (old-tag nil)
+         (next-path nil)
+         (next-tag nil))
+    (unwind-protect
+         (progn
+           (multiple-value-setq (old-path old-tag)
+             (release-server-tests--git-deployment
+              deployments-root "0.16.0" :updater-p nil))
+           (multiple-value-setq (next-path next-tag)
+             (release-server-tests--git-deployment
+              deployments-root "0.16.1"))
+           (release-updater--replace-symlink selection-path old-path)
+           (let ((identity-configuration
+                   (release-server-configuration-create
+                    :source-root selection-path
+                    :public-root (merge-pathnames "public/" root))))
+             (test-assert
+              (equal
+               (release-server-configuration-source-root
+                identity-configuration)
+               (truename old-path))
+              "release server captures the canonical selected deployment")
+             (test-assert
+              (and
+               (string=
+                (release-server-configuration-source-tag
+                 identity-configuration)
+                (release-source-tag-name old-tag))
+               (string=
+                (release-server-configuration-source-commit
+                 identity-configuration)
+                (release-source-tag-commit old-tag)))
+              "safe Git identity captures a root-owned lightweight deployment"))
+           (let ((configuration
+                   (release-updater-configuration-create
+                    :selection-path selection-path
+                    :deployments-root deployments-root
+                    :state-root state-root
+                    :host-lock-root host-lock-root
+                    :repository "https://example.invalid/autolith.git"
+                    :poll-seconds 1
+                    :activation-timeout-seconds 1
+                    :server-service (merge-pathnames "server-service/" root)
+                    :builder-service (merge-pathnames "builder-service/" root)
+                    :health-url "http://127.0.0.1:18098/health"
+                    :service-account "nobody"
+                    :service-home (merge-pathnames "service-home/" root)))
+                 (restart-count 0))
+             (let* ((commands nil)
+                    (*release-updater-service-command-function*
+                      (lambda (command &key output error-output)
+                        (declare (ignore error-output))
+                        (push command commands)
+                        (if (eq output ':string)
+                            "true 4242"
+                            nil))))
+               (release-updater--service-cycle
+                configuration
+                (release-updater-configuration-server-service configuration))
+               (test-assert
+                (and (= (length commands) 2)
+                     (member "-wd" (second commands) :test #'string=)
+                     (member "-d" (second commands) :test #'string=)
+                     (member "-wu" (first commands) :test #'string=)
+                     (member "-u" (first commands) :test #'string=))
+                "activation explicitly waits for service down before waited up")
+               (test-assert
+                (release-updater--service-up-p
+                 (release-updater-configuration-builder-service configuration))
+                "builder activation verifies a live positive process identity"))
+             (test-assert
+              (release-updater--state-valid-p
+               (release-updater--state ':active old-tag))
+              "native updater states validate without a phantom list element")
+             (release-updater--write-state
+              configuration
+              (release-updater--state ':active old-tag))
+             (test-assert
+              (equal (release-updater--read-state configuration)
+                     (release-updater--state ':active old-tag))
+              "native updater state round trips as one strict readable form")
+             (release-updater-promote
+              configuration next-path next-tag
+              :restart-function
+              (lambda (ignored)
+                (declare (ignore ignored))
+                (incf restart-count)
+                (test-assert
+                 (equal (truename selection-path) (truename next-path))
+                 "activation observes the atomically selected final deployment")))
+             (test-assert (= restart-count 1)
+                          "successful promotion activates services once")
+             (test-assert
+              (equal (truename selection-path) (truename next-path))
+              "successful promotion retains the new current selection")
+             (test-assert
+              (eq (getf (rest (release-updater--read-state configuration))
+                        ':phase)
+                  ':active)
+              "successful promotion durably reaches the active phase")
+             (multiple-value-bind (failed-path failed-tag)
+                 (release-server-tests--git-deployment
+                  deployments-root "0.16.2")
+               (let ((activation-count 0)
+                     (failed-p nil))
+                 (handler-case
+                     (release-updater-promote
+                      configuration failed-path failed-tag
+                      :restart-function
+                      (lambda (ignored)
+                        (declare (ignore ignored))
+                        (incf activation-count)
+                        (when (= activation-count 1)
+                          (error "Injected activation failure."))))
+                   (release-updater-error ()
+                     (setf failed-p t)))
+                 (test-assert failed-p
+                              "activation failure remains structured")
+                 (test-assert (= activation-count 2)
+                              "failed activation restarts the rollback selection")
+                 (test-assert
+                  (equal (truename selection-path) (truename next-path))
+                  "failed activation atomically restores last known good")
+                 (let ((state (release-updater--read-state configuration)))
+                   (test-assert
+                    (string=
+                     (getf (rest state) ':failed-tag)
+                     (release-source-tag-name failed-tag))
+                    "failed immutable activation is durably quarantined")
+                   (multiple-value-bind (newer-path newer-tag)
+                       (release-server-tests--git-deployment
+                        deployments-root "0.16.3")
+                     (declare (ignore newer-path))
+                     (test-assert
+                      (eq
+                       (release-updater--pending-tag
+                        next-tag (list failed-tag newer-tag) state)
+                       newer-tag)
+                      "a failed tag does not block a later semantic release")
+                     (test-assert
+                      (null
+                       (release-updater--pending-tag
+                        next-tag (list failed-tag) state))
+                      "a deterministic failed tag is not retried forever")))))
+             (multiple-value-bind (recovery-path recovery-tag)
+                 (release-server-tests--git-deployment
+                  deployments-root "0.16.4")
+               (release-updater--replace-symlink selection-path next-path)
+               (release-updater--write-state
+                configuration
+                (release-updater--state
+                 ':prepared recovery-tag :previous next-tag))
+               (let ((recovery-restarts 0))
+                 (release-updater--reconcile
+                  configuration
+                  (lambda (ignored)
+                    (declare (ignore ignored))
+                    (incf recovery-restarts)))
+                 (test-assert (= recovery-restarts 1)
+                              "an interrupted prepared transaction resumes once")
+                 (test-assert
+                  (equal (truename selection-path) (truename recovery-path))
+                  "reconciliation completes the prepared atomic selection"))))
+           (multiple-value-bind (annotated-path annotated-tag)
+               (release-server-tests--git-deployment
+                (merge-pathnames "annotated/" root)
+                "0.17.0"
+                :annotated-p t)
+             (test-assert
+              (not
+               (release-updater--checkout-valid-p
+                annotated-path annotated-tag))
+              "host deployments reject annotated release tags")))
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  (let* ((root
+           (uiop:ensure-directory-pathname
+            (merge-pathnames
+             (format nil "autolith-release-final-path-tests-~A/"
+                     (make-identifier))
+             (uiop:temporary-directory))))
+         (remote-root (merge-pathnames "remote/" root))
+         (deployments-root (merge-pathnames "deployments/" root))
+         (configuration
+           (release-updater-configuration-create
+            :selection-path (merge-pathnames "current" root)
+            :deployments-root deployments-root
+            :state-root (merge-pathnames "updater-state/" root)
+            :host-lock-root (merge-pathnames "builder-state/" root)
+            :repository
+            (namestring (merge-pathnames "v0.18.0/" remote-root))
+            :poll-seconds 1
+            :activation-timeout-seconds 1
+            :server-service (merge-pathnames "server-service/" root)
+            :builder-service (merge-pathnames "builder-service/" root)
+            :health-url "http://127.0.0.1:18098/health"
+            :service-account "nobody"
+            :service-home (merge-pathnames "service-home/" root))))
+    (unwind-protect
+         (multiple-value-bind (remote-path source-tag)
+             (release-server-tests--git-deployment remote-root "0.18.0")
+           (declare (ignore remote-path))
+           (let ((setup-called-p nil)
+                 (final
+                   (release-updater--deployment-path
+                    configuration source-tag)))
+             (release-updater-prepare-deployment
+              configuration source-tag
+              :setup-function
+              (lambda (ignored candidate ignored-tag)
+                (declare (ignore ignored ignored-tag))
+                (setf setup-called-p t)
+                (test-assert
+                 (equal (truename candidate) (truename final))
+                 "bootstrap and checks run only after the final-path rename")
+                (test-assert
+                 (not
+                  (uiop:directory-exists-p
+                   (merge-pathnames
+                    (format nil ".~A.incoming.~D/"
+                            (release-source-tag-name source-tag)
+                            (sb-posix:getpid))
+                    deployments-root)))
+                 "no incoming pathname survives into candidate setup")))
+             (test-assert setup-called-p
+                          "final-path candidate setup is invoked")
+             (release-server-tests--write-file
+              (merge-pathnames "autolith.asd"
+                               (merge-pathnames "v0.18.0/" remote-root))
+              (format nil
+                      "(asdf:defsystem #:autolith~%  :version \"0.18.1\"~%)~%"))
+             (release-server-tests--git
+              (merge-pathnames "v0.18.0/" remote-root)
+              '("add" "autolith.asd"))
+             (release-server-tests--git
+              (merge-pathnames "v0.18.0/" remote-root)
+              '("commit" "--quiet" "-m" "Advance release fixture"))
+             (release-server-tests--git
+              (merge-pathnames "v0.18.0/" remote-root)
+              '("tag" "v0.18.1"))
+             (let* ((commit
+                      (release-server-tests--git
+                       (merge-pathnames "v0.18.0/" remote-root)
+                       '("rev-parse" "HEAD")))
+                    (failed-tag
+                      (release-server-tests--source-tag "v0.18.1" commit))
+                    (failed-path
+                      (release-updater--deployment-path
+                       configuration failed-tag))
+                    (failed-p nil))
+               (handler-case
+                   (release-updater-prepare-deployment
+                    configuration failed-tag
+                    :setup-function
+                    (lambda (ignored candidate ignored-tag)
+                      (declare (ignore ignored candidate ignored-tag))
+                      (error "Injected final-path setup failure.")))
+                 (release-updater-error ()
+                   (setf failed-p t)))
+               (test-assert failed-p
+                            "final-path setup failures remain structured")
+               (test-assert
+                (not (uiop:directory-exists-p failed-path))
+                "a failed updater-owned final candidate is removed for retry")))
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil))

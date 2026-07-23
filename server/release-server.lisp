@@ -31,7 +31,19 @@
     :initarg :port
     :reader release-server-configuration-port
     :type (integer 1 65535)
-    :documentation "The TCP port accepted by the HTTP listener."))
+    :documentation "The TCP port accepted by the HTTP listener.")
+   (source-tag
+    :initarg :source-tag
+    :initform nil
+    :reader release-server-configuration-source-tag
+    :type (option string)
+    :documentation "The exact source tag captured when this server started.")
+   (source-commit
+    :initarg :source-commit
+    :initform nil
+    :reader release-server-configuration-source-commit
+    :type (option string)
+    :documentation "The exact source commit captured when this server started."))
   (:documentation "Filesystem and listener settings for the release service."))
 
 (defclass release-server-response ()
@@ -83,35 +95,92 @@
           (error 'configuration-error
                  :message (format nil "Invalid release server port ~S." value))))))
 
+(-> release-server--git-output (pathname list) string)
+(defun release-server--git-output (directory arguments)
+  "Return trimmed output from Git ARGUMENTS in DIRECTORY."
+  (let ((canonical
+          (namestring
+           (truename (uiop:ensure-directory-pathname directory)))))
+    (string-trim
+     '(#\Space #\Tab #\Newline #\Return)
+     (uiop:run-program
+      (append
+       (list "git" "-c" (format nil "safe.directory=~A" canonical)
+             "-C" canonical)
+       arguments)
+      :output :string
+      :error-output :output))))
+
+(-> release-server--source-identity
+    (pathname)
+    (values (option string) (option string)))
+(defun release-server--source-identity (source-root)
+  "Return SOURCE-ROOT's exact lightweight semantic tag and commit, if any."
+  (handler-case
+      (let* ((commit
+               (release-server--git-output
+                source-root '("rev-parse" "HEAD")))
+             (tags
+               (remove-if-not
+                #'release-tag-valid-p
+                (uiop:split-string
+                 (release-server--git-output
+                  source-root '("tag" "--points-at" "HEAD"))
+                 :separator '(#\Newline #\Return))))
+             (tag (and (= (length tags) 1) (first tags))))
+        (if (and tag
+                 (= (length commit) 40)
+                 (string=
+                  (release-server--git-output
+                   source-root
+                   (list "cat-file" "-t" (format nil "refs/tags/~A" tag)))
+                  "commit"))
+            (values tag commit)
+            (values nil nil)))
+    (error ()
+      (values nil nil))))
+
 (-> release-server-configuration-create
     (&key (:source-root (option pathname))
           (:public-root (option pathname))
           (:address (option string))
-          (:port (option integer)))
+          (:port (option integer))
+          (:source-tag (option string))
+          (:source-commit (option string)))
     release-server-configuration)
 (defun release-server-configuration-create
-    (&key source-root public-root address port)
+    (&key source-root public-root address port source-tag source-commit)
   "Create release server settings from arguments and environment defaults."
-  (make-instance
-   'release-server-configuration
-   :source-root
-   (uiop:ensure-directory-pathname
-    (or source-root
-        (let ((configured (uiop:getenv "AUTOLITH_RELEASE_SOURCE_ROOT")))
-          (and configured (pathname configured)))
-        (asdf:system-source-directory :autolith)))
-   :public-root
-   (uiop:ensure-directory-pathname
-    (or public-root
-        (let ((configured (uiop:getenv "AUTOLITH_RELEASE_PUBLIC_ROOT")))
-          (and configured (pathname configured)))
-        #p"/srv/autolith-release-server/"))
-   :address (or address
-                (uiop:getenv "AUTOLITH_RELEASE_LISTEN_ADDRESS")
-                *release-server-default-address*)
-   :port (or port
-             (release-server--environment-port
-              (uiop:getenv "AUTOLITH_RELEASE_LISTEN_PORT")))))
+  (let* ((configured-source-root
+           (uiop:ensure-directory-pathname
+            (or source-root
+                (let ((configured
+                        (uiop:getenv "AUTOLITH_RELEASE_SOURCE_ROOT")))
+                  (and configured (pathname configured)))
+                (asdf:system-source-directory :autolith))))
+         (resolved-source-root
+           (or (ignore-errors (truename configured-source-root))
+               configured-source-root)))
+    (multiple-value-bind (detected-tag detected-commit)
+        (release-server--source-identity resolved-source-root)
+      (make-instance
+       'release-server-configuration
+       :source-root resolved-source-root
+       :public-root
+       (uiop:ensure-directory-pathname
+        (or public-root
+            (let ((configured
+                    (uiop:getenv "AUTOLITH_RELEASE_PUBLIC_ROOT")))
+              (and configured (pathname configured)))
+            #p"/srv/autolith-release-server/"))
+       :address (or address
+                    (uiop:getenv "AUTOLITH_RELEASE_LISTEN_ADDRESS")
+                    *release-server-default-address*)
+       :port (or port
+                 (release-server--environment-port
+                  (uiop:getenv "AUTOLITH_RELEASE_LISTEN_PORT")))
+       :source-tag (or source-tag detected-tag)
+       :source-commit (or source-commit detected-commit)))))
 
 
 ;;;; -- Published Releases --
@@ -261,6 +330,16 @@
            (find #\\ path))
        (release-server--not-found))
       ((string= path "/health")
+       (release-server--response 200 "text/plain; charset=utf-8"
+                                 (format nil "ok~%")
+                                 :headers (list (cons "Cache-Control" "no-store"))))
+      ((and (release-server-configuration-source-tag configuration)
+            (release-server-configuration-source-commit configuration)
+            (string=
+             path
+             (format nil "/health/~A/~A"
+                     (release-server-configuration-source-tag configuration)
+                     (release-server-configuration-source-commit configuration))))
        (release-server--response 200 "text/plain; charset=utf-8"
                                  (format nil "ok~%")
                                  :headers (list (cons "Cache-Control" "no-store"))))

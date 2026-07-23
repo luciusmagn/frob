@@ -14,6 +14,15 @@
       ((equal arguments '("build-once"))
        (release-builder-build-pending
         (release-builder-configuration-create)))
+      ((equal arguments '("update"))
+       (release-updater-run (release-updater-configuration-create)))
+      ((equal arguments '("update-once"))
+       (release-updater-update-once
+        (release-updater-configuration-create))
+       nil)
+      ((and (= (length arguments) 3)
+            (string= (first arguments) "host-probe"))
+       (release-updater-host-probe (second arguments) (third arguments)))
       ((and arguments
             (string= (first arguments) "archive")
             (null (rest (rest arguments))))
@@ -28,5 +37,5 @@
       (t
        (error 'configuration-error
               :message
-              "Usage: server/run [serve|build|build-once|archive [DIRECTORY]]"))))
+              "Usage: server/run [serve|build|build-once|update|update-once|host-probe TAG COMMIT|archive [DIRECTORY]]"))))
   nil)

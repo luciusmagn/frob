@@ -6,10 +6,10 @@ export HOME=/var/lib/autolith-release-server/home
 export XDG_DATA_HOME=$HOME/.local/share
 export XDG_STATE_HOME=$HOME/.local/state
 export XDG_CACHE_HOME=$HOME/.cache
-export AUTOLITH_RELEASE_SOURCE_ROOT=/srv/autolith-release-server/source
+export AUTOLITH_RELEASE_SOURCE_ROOT=/srv/autolith-release-server/current
 export AUTOLITH_RELEASE_PUBLIC_ROOT=/srv/autolith-release-server/public
 export AUTOLITH_RELEASE_LISTEN_ADDRESS=127.0.0.1
 export AUTOLITH_RELEASE_LISTEN_PORT=8098
 
 exec s6-setuidgid autolith-release \
-  /srv/autolith-release-server/source/server/run serve
+  /srv/autolith-release-server/current/server/run serve

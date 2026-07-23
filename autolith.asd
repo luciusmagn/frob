@@ -104,6 +104,7 @@
                 :serial t
                 :components ((:file "release-server")
                              (:file "release-builder")
+                             (:file "release-updater")
                              (:file "release-archive")
                              (:file "release-main")))))
 

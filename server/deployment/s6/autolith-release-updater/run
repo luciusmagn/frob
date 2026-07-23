@@ -1,0 +1,24 @@
+#!/bin/sh
+
+exec 2>&1
+
+umask 022
+
+export HOME=/var/lib/autolith-release-server/home
+export XDG_DATA_HOME=$HOME/.local/share
+export XDG_STATE_HOME=/var/lib/autolith-release-server/updater/state
+export XDG_CACHE_HOME=/var/lib/autolith-release-server/updater/cache
+export AUTOLITH_RELEASE_SOURCE_ROOT=/srv/autolith-release-server/current
+export AUTOLITH_RELEASE_SELECTION_PATH=/srv/autolith-release-server/current
+export AUTOLITH_RELEASE_DEPLOYMENTS_ROOT=/srv/autolith-release-server/deployments
+export AUTOLITH_RELEASE_UPDATER_STATE_ROOT=/var/lib/autolith-release-server/updater
+export AUTOLITH_RELEASE_PUBLIC_ROOT=/srv/autolith-release-server/public
+export AUTOLITH_RELEASE_STATE_ROOT=/var/lib/autolith-release-server/builder
+export AUTOLITH_RELEASE_UPDATE_POLL_SECONDS=60
+export AUTOLITH_RELEASE_SERVICE_HOME=/var/lib/autolith-release-server/home
+
+if [ -f /srv/autolith-release-server/current/server/release-updater.lisp ]; then
+  exec /srv/autolith-release-server/current/server/run update
+fi
+
+exec /srv/autolith-release-server/source/server/run update

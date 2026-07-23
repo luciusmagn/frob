@@ -100,6 +100,27 @@
           (error 'configuration-error
                  :message (format nil "Invalid ~A ~S." name value))))))
 
+(-> release-host--call-with-lock (pathname function) t)
+(defun release-host--call-with-lock (state-root function)
+  "Call FUNCTION while holding the release host's process-shared operation lock."
+  (let* ((pathname
+           (merge-pathnames "host-operation.lock"
+                            (uiop:ensure-directory-pathname state-root)))
+         (descriptor nil))
+    (ensure-directories-exist pathname)
+    (unwind-protect
+         (progn
+           (setf descriptor
+                 (sb-posix:open
+                  (namestring pathname)
+                  (logior sb-posix:o-creat sb-posix:o-rdwr)
+                  #o600))
+           (sb-posix:lockf descriptor sb-posix:f-lock 0)
+           (funcall function))
+      (when descriptor
+        (ignore-errors (sb-posix:lockf descriptor sb-posix:f-ulock 0))
+        (ignore-errors (sb-posix:close descriptor))))))
+
 (-> release-builder-configuration-create
     (&key (:source-root (option pathname))
           (:state-root (option pathname))
@@ -497,10 +518,14 @@ semantic order so a temporary builder outage cannot skip a version."
 (-> release-builder-build-pending (release-builder-configuration) list)
 (defun release-builder-build-pending (configuration)
   "Build every newly discovered release and return its publication paths."
-  (loop for source-tag in
-        (release-builder-pending-tags configuration
-                                      (release-builder-remote-tags configuration))
-        collect (release-builder-build configuration source-tag)))
+  (release-host--call-with-lock
+   (release-builder-configuration-state-root configuration)
+   (lambda ()
+     (loop for source-tag in
+           (release-builder-pending-tags
+            configuration
+            (release-builder-remote-tags configuration))
+           collect (release-builder-build configuration source-tag)))))
 
 (-> release-builder-run (release-builder-configuration) null)
 (defun release-builder-run (configuration)

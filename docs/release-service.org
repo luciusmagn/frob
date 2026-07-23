@@ -4,7 +4,7 @@
 
 * Components
 
-The release service has two independent long-running processes:
+The release service has three independent long-running processes:
 
 - =server/run serve= runs the Common Lisp HTTP server on loopback. It serves
   the installer, health check, latest-release redirect, archives, and checksum
@@ -13,6 +13,10 @@ The release service has two independent long-running processes:
   tag, runs the complete repository check in the pinned Ubuntu 22 builder
   container with Rust 1.97.1, verifies the archive checksum, and publishes the
   two artifacts by one atomic directory rename.
+- =server/run update= polls those tags for release-host implementation updates.
+  It prepares the newest tag as a versioned deployment, atomically selects it,
+  verifies the restarted services, and rolls back to the preceding deployment
+  if activation fails.
 
 Inside the container, Common Lisp coordinates dependency setup, repository
 checks, and archive construction. Building the pinned SBCL runtime also moves
@@ -22,9 +26,16 @@ bootstrap remain shell because they must run before a Lisp image is available
 or replace the current Unix process.
 
 The HTTP process runs as the unprivileged =autolith-release= user. It can read
-the tracked checkout and published artifacts but cannot write them. The builder
-runs separately with Docker access and never handles public requests. Docker
-authority must not be given to the HTTP process.
+the selected checkout and published artifacts but cannot write them. The
+builder runs separately with Docker access and never handles public requests.
+The updater runs as root because it owns deployments and controls s6 services,
+but it performs bootstrap, checks, and candidate probes as =autolith-release=.
+Docker authority must not be given to the HTTP process.
+
+The builder and updater hold the same process-shared host-operation lock. An
+update therefore waits for an in-flight container build to finish before
+changing the selected source or restarting the builder. The builder cannot
+begin another build until promotion or rollback releases that lock.
 
 The GitHub tag workflow does not build or host binaries. It waits until the
 checksum is reachable from this service, then creates a metadata-only GitHub
@@ -35,10 +46,14 @@ releases through GitHub.
 * Filesystem layout
 
 #+BEGIN_SRC text
-/srv/autolith-release-server/source/   root-owned tracked checkout
-/srv/autolith-release-server/public/   root-owned published archives
-/var/lib/autolith-release-server/home/ unprivileged server runtime state
-/var/lib/autolith-release-server/builder/ private builder cache and staging
+/srv/autolith-release-server/current                 atomic deployment symlink
+/srv/autolith-release-server/previous                last known-good symlink
+/srv/autolith-release-server/deployments/TAG/        root-owned exact tag
+/srv/autolith-release-server/source/                 first-update bootstrap only
+/srv/autolith-release-server/public/                 published archives
+/var/lib/autolith-release-server/home/               service runtime and cache
+/var/lib/autolith-release-server/builder/            builder cache and shared lock
+/var/lib/autolith-release-server/updater/            private update transaction
 #+END_SRC
 
 The builder reuses its container image, pinned SBCL build, Quicklisp tree, and
@@ -46,25 +61,49 @@ locked dependency cache. A failed build remains private under the builder state
 root. The server considers a release visible only when both its archive and
 checksum exist in the final release directory.
 
+The updater retains the current and previous deployments. A failed activation
+is also retained for diagnosis. After a later successful activation it prunes
+older deployments only when they remain clean exact lightweight tags. It never
+resets, overwrites, or removes a deployment containing tracked changes.
+
 * Initial Artix and s6 deployment
 
-Create the service account and roots, then clone the tracked source:
+Create the service account and roots:
 
 #+BEGIN_SRC sh
 useradd --system --home-dir /var/lib/autolith-release-server/home \
   --shell /usr/bin/nologin autolith-release
 install -d -m 0755 /srv/autolith-release-server/public
+install -d -m 0755 /srv/autolith-release-server/deployments
 install -d -m 0700 /var/lib/autolith-release-server/builder
+install -d -m 0700 /var/lib/autolith-release-server/updater
 install -d -o autolith-release -g autolith-release -m 0700 \
   /var/lib/autolith-release-server/home
-git clone https://github.com/luciusmagn/autolith.git \
-  /srv/autolith-release-server/source
 #+END_SRC
 
-Install Quicklisp into the service home, materialize the locked dependencies,
-and install the pinned runtime. Run the repository bootstrap with =HOME= and
-the XDG variables matching the s6 definitions. Keep the source checkout owned
-by root, then give the service account ownership of only its home:
+Select an explicit lightweight release tag and record its exact remote commit.
+Never deploy a branch name, an annotated tag, or a tag whose identity changes
+between discovery and checkout.
+
+#+BEGIN_SRC sh
+tag=v0.16.1
+repository=https://github.com/luciusmagn/autolith.git
+commit=$(git ls-remote --tags --refs "$repository" "refs/tags/$tag" |
+  awk 'NR == 1 { print $1 }')
+test "${#commit}" -eq 40
+git clone --depth 1 --branch "$tag" --single-branch "$repository" \
+  "/srv/autolith-release-server/deployments/$tag"
+test "$(git -C "/srv/autolith-release-server/deployments/$tag" \
+  cat-file -t "refs/tags/$tag")" = commit
+test "$(git -C "/srv/autolith-release-server/deployments/$tag" rev-parse HEAD)" \
+  = "$commit"
+ln -s "deployments/$tag" /srv/autolith-release-server/current
+#+END_SRC
+
+Install Quicklisp into the service home, then bootstrap the selected deployment
+as the service account at its final pathname. The updater uses this same
+ownership transition for future deployments so root never creates cache files
+inside the unprivileged home.
 
 #+BEGIN_SRC sh
 export HOME=/var/lib/autolith-release-server/home
@@ -76,16 +115,69 @@ curl --fail --location --show-error --retry 3 \
   https://beta.quicklisp.org/quicklisp.lisp
 sbcl --noinform --non-interactive --load /tmp/quicklisp.lisp \
   --eval '(quicklisp-quickstart:install)'
-cd /srv/autolith-release-server/source
-./script/bootstrap
-chown -R autolith-release:autolith-release "$HOME"
+deployment="/srv/autolith-release-server/deployments/$tag"
+chown -R autolith-release:autolith-release "$deployment"
+s6-setuidgid autolith-release "$deployment/script/bootstrap"
+s6-setuidgid autolith-release "$deployment/script/check"
+chown -R root:root "$deployment"
+chmod -R go-w "$deployment"
 #+END_SRC
 
-Copy both tracked service directories from =server/deployment/s6/= into
+Copy all three tracked service directories from =server/deployment/s6/= into
 =/etc/s6/sv/=, add them to the active s6-rc bundle, and reload the compiled
 database. Replace the public Caddy site with
 =server/deployment/caddy.caddyfile=, validate the complete Caddy configuration,
 then reload Caddy.
+
+* One-time migration from the fixed checkout
+
+Release 0.16.1 is the first release that can update the host itself. An existing
+0.16.0 host needs one final attended migration. Do this before creating the
+0.16.1 tag so the updater is already polling when the tag appears.
+
+First, quiesce the old builder and wait for its supervised process to stop. Do
+not proceed while an Autolith release container remains active:
+
+#+BEGIN_SRC sh
+s6-svc -wd -T 600000 -d /run/service/autolith-release-builder
+docker ps --filter ancestor=autolith-release-builder:ubuntu-22.04
+#+END_SRC
+
+Require the existing fixed checkout to be clean. Never reset or discard it.
+Fetch the final pushed 0.16.1 commit into that checkout, detach at the explicit
+commit, then bootstrap it as =autolith-release=. This checkout is only the
+first-update runner; it is not selected as the public server source.
+
+#+BEGIN_SRC sh
+source=/srv/autolith-release-server/source
+test -z "$(git -C "$source" status --porcelain)"
+git -C "$source" fetch origin
+commit=REPLACE_WITH_FINAL_PUSHED_0_16_1_COMMIT
+git -C "$source" checkout --detach "$commit"
+chown -R autolith-release:autolith-release "$source"
+s6-setuidgid autolith-release "$source/script/bootstrap"
+s6-setuidgid autolith-release "$source/script/check"
+chown -R root:root "$source"
+chmod -R go-w "$source"
+#+END_SRC
+
+Clone and bootstrap the exact current 0.16.0 tag under =deployments/= using the
+same commands from the initial setup, then point =current= at that baseline.
+Install the three new s6 definitions, but keep the builder supervised down
+through the s6 database reload. Immediately before pushing the 0.16.1 tag,
+request down again, wait for it, and verify that no release container exists.
+The 0.16.1 updater will start the builder only after successful promotion.
+
+#+BEGIN_SRC sh
+s6-svc -wd -T 600000 -d /run/service/autolith-release-builder
+docker ps --filter ancestor=autolith-release-builder:ubuntu-22.04
+#+END_SRC
+
+The updater run script detects that the selected 0.16.0 deployment has no
+updater and temporarily executes
+=/srv/autolith-release-server/source/server/run update=. Once 0.16.1 is tagged,
+it prepares and selects 0.16.1, cycles the server and builder, and exits. s6
+then restarts it from =current=, so every later update is autonomous.
 
 * Operation
 
@@ -96,10 +188,25 @@ HOME=/var/lib/autolith-release-server/home \
 XDG_DATA_HOME=/var/lib/autolith-release-server/home/.local/share \
 XDG_STATE_HOME=/var/lib/autolith-release-server/home/.local/state \
 XDG_CACHE_HOME=/var/lib/autolith-release-server/home/.cache \
-AUTOLITH_RELEASE_SOURCE_ROOT=/srv/autolith-release-server/source \
+AUTOLITH_RELEASE_SOURCE_ROOT=/srv/autolith-release-server/current \
 AUTOLITH_RELEASE_STATE_ROOT=/var/lib/autolith-release-server/builder \
 AUTOLITH_RELEASE_PUBLIC_ROOT=/srv/autolith-release-server/public \
-  /srv/autolith-release-server/source/server/run build-once
+  /srv/autolith-release-server/current/server/run build-once
+#+END_SRC
+
+Run one foreground host update scan with:
+
+#+BEGIN_SRC sh
+HOME=/var/lib/autolith-release-server/home \
+XDG_DATA_HOME=/var/lib/autolith-release-server/home/.local/share \
+XDG_STATE_HOME=/var/lib/autolith-release-server/home/.local/state \
+XDG_CACHE_HOME=/var/lib/autolith-release-server/home/.cache \
+AUTOLITH_RELEASE_SOURCE_ROOT=/srv/autolith-release-server/current \
+AUTOLITH_RELEASE_SELECTION_PATH=/srv/autolith-release-server/current \
+AUTOLITH_RELEASE_DEPLOYMENTS_ROOT=/srv/autolith-release-server/deployments \
+AUTOLITH_RELEASE_UPDATER_STATE_ROOT=/var/lib/autolith-release-server/updater \
+AUTOLITH_RELEASE_STATE_ROOT=/var/lib/autolith-release-server/builder \
+  /srv/autolith-release-server/current/server/run update-once
 #+END_SRC
 
 Verify the public boundary after deployment:
@@ -112,10 +219,29 @@ curl -fsSL https://sh.lambda-symbolics.com/autolith | sh -n
 
 An empty publication root builds only the newest remote tag. After the first
 successful publication, the builder processes every newer missed tag in order.
-Update the service implementation by pulling the source checkout, running
-=./script/bootstrap= when dependencies or the runtime change, and restarting
-both services. Release artifacts remain immutable across implementation
-updates.
+The updater independently chooses the newest release-host tag. It clones into a
+same-filesystem incoming path, verifies the exact direct tag and commit, renames
+the checkout to its final versioned pathname, and only then runs bootstrap and
+the complete repository check. This ordering is required because Qlot and image
+manifests may retain absolute source pathnames.
+
+A repository check is retried once in a fresh process before its immutable tag
+is suppressed. Network, fetch, and bootstrap failures remain retryable. Source,
+version, repeated check, candidate-probe, and moved-tag failures are recorded in
+the native deployment state and are not attempted every minute. A newer tag is
+still eligible.
+
+Promotion first writes a =:prepared= native sexp transaction, updates the
+=previous= and =current= symlinks atomically, and writes =:selected=. It then
+drives the old server fully down and the selected server up. The selected
+process must answer =/health/TAG/COMMIT= before the builder is similarly cycled
+and verified up. Only then does the transaction become =:active=. A crash in
+any intermediate phase is completed on the next updater start. Activation
+failure restores =previous= and cycles both services against that source.
+Generic =/health= is accepted only when rolling back to the legacy 0.16.0
+deployment, which predates source-specific health.
+
+Release artifacts remain immutable across host implementation updates.
 
 Installed clients use the =latest= redirect only for bounded availability
 requests and again after an attended update choice. The background request
