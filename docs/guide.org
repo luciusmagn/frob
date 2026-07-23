@@ -423,10 +423,11 @@ implementation maximum of 32.
 
 Queued and running children appear in stable creation order in a colored live
 strip immediately above the modeline. Running children share a spinner updated
-four times per second, queued children have a static marker, and each row shows
-the child identity, role, detached state, and current tool or assignment. The
-strip shows at most eight children and summarizes any overflow. Terminal
-children disappear without entering conversation history.
+four times per second, queued children have a static marker, and each indented
+row shows the child identity, aligned role, and current tool or assignment.
+Blank rows separate the heading, child list, and modeline. The strip shows at
+most eight children and summarizes any overflow. Terminal children disappear;
+the live projection itself never enters conversation history.
 
 =job.list= lists visible jobs, =job.get= inspects one job and its progress,
 =job.wait= waits for a bounded interval, and =job.cancel= interrupts a queued or
