@@ -70,7 +70,25 @@
             (= (getf (getf (provider-rate-limits provider) :primary)
                        :used-percent)
                100)
-            "HTTP error headers refresh the visible rate limit snapshot"))
+            "HTTP error headers refresh the visible rate limit snapshot")
+           (dolist (status '(500 502 503 504))
+             (let ((transient-condition
+                     (make-condition
+                      'http-request-failed
+                      :body "temporary provider failure"
+                      :status status
+                      :headers nil
+                      :uri nil
+                      :method :post)))
+               (test-assert
+                (handler-case
+                    (progn
+                      (provider-signal-http-failure
+                       provider transient-condition)
+                      nil)
+                  (provider-retryable-error (error)
+                    (= (provider-error-status error) status)))
+                (format nil "HTTP ~D is eligible for bounded retry" status)))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -449,6 +467,34 @@
      "response.failed keeps its response identifier distinct")
     (test-assert (search "Temporary provider failure." (format nil "~A" condition))
                  "response.failed surfaces the provider's explanation"))
+  (dolist (code '("server_is_overloaded" "slow_down"))
+    (let* ((source
+             (test-sse-event-string
+              (json-object
+               "type" "response.failed"
+               "response"
+               (json-object
+                "id" "overloaded-response"
+                "error"
+                (json-object
+                 "code" code
+                 "message" "The service is temporarily overloaded.")))))
+           (condition
+             (handler-case
+                 (progn
+                   (provider--consume-stream
+                    (make-instance 'test-character-input-stream :source source)
+                    nil
+                    #'identity)
+                   nil)
+               (provider-error (error)
+                 error))))
+      (test-assert
+       (typep condition 'provider-retryable-error)
+       (format nil "~A response failures are retryable" code))
+      (test-assert
+       (string= (provider-error-code condition) code)
+       (format nil "~A response failures retain their code" code))))
   (let* ((source
            (test-sse-event-string
             (json-object
@@ -829,6 +875,22 @@
               :request-id "request-server-error"
               :response-id "response-server-error"
               :response nil))
+      ((eq outcome :overloaded)
+       (error 'provider-retryable-error
+              :message "Injected provider overload."
+              :status nil
+              :code "server_is_overloaded"
+              :request-id "request-overloaded"
+              :response-id "response-overloaded"
+              :response nil))
+      ((eq outcome :slow-down)
+       (error 'provider-retryable-error
+              :message "Injected provider slowdown."
+              :status nil
+              :code "slow_down"
+              :request-id "request-slow-down"
+              :response-id "response-slow-down"
+              :response nil))
       (t
        (error "Invalid scripted provider outcome ~S." outcome)))))
 
@@ -919,7 +981,8 @@
          (let ((*provider-stream-retry-sleep-function*
                  (lambda (seconds)
                    (declare (ignore seconds)))))
-           (dolist (failure '(:stream-error :server-error))
+           (dolist (failure
+                    '(:stream-error :server-error :overloaded :slow-down))
              (let ((events nil)
                    (provider
                      (test-codex-provider-create
@@ -949,6 +1012,51 @@
                         (test-codex-provider-refresh-flags provider))
                        '(nil nil))
                 "provider retries do not force an authentication refresh")))
+           (let ((delays nil)
+                 (provider
+                   (test-codex-provider-create
+                    configuration
+                    (list :overloaded :overloaded result))))
+             (let ((*provider-stream-retry-sleep-function*
+                     (lambda (seconds)
+                       (push seconds delays))))
+               (test-assert
+                (eq (provider-stream-turn
+                     provider
+                     conversation
+                     :tool-namespaces #()
+                     :event-callback #'identity)
+                    result)
+                "provider overload retries may recover")
+               (test-assert
+                (equal (nreverse delays) '(1 2))
+                "provider overload retries use the bounded backoff schedule")))
+           (let ((provider
+                   (test-codex-provider-create
+                    configuration
+                    (list :overloaded result))))
+             (let ((*provider-stream-retry-sleep-function*
+                     (lambda (seconds)
+                       (declare (ignore seconds))
+                       (error
+                        (make-condition 'application-turn-cancelled)))))
+               (test-assert
+                (handler-case
+                    (progn
+                      (provider-stream-turn
+                       provider
+                       conversation
+                       :tool-namespaces #()
+                       :event-callback #'identity)
+                      nil)
+                  (application-turn-cancelled ()
+                    t))
+                "turn cancellation interrupts provider overload backoff")
+               (test-assert
+                (= (length
+                    (test-codex-provider-refresh-flags provider))
+                   1)
+                "turn cancellation prevents another provider attempt")))
            (let ((provider
                    (test-codex-provider-create
                     configuration

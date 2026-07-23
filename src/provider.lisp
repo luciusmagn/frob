@@ -147,8 +147,15 @@
   "Backoff seconds for bounded provider stream reconnects.")
 
 (defparameter *provider-retryable-event-error-codes*
-    '("server_error" "internal_server_error")
+    '("server_error"
+      "internal_server_error"
+      "server_is_overloaded"
+      "slow_down")
   "Structured SSE error codes eligible for bounded retry.")
+
+(defparameter *provider-retryable-http-statuses*
+    '(500 502 503 504)
+  "HTTP statuses eligible for bounded provider retry.")
 
 (defparameter *provider-stream-retry-sleep-function* #'sleep
   "Function used to wait between provider stream reconnect attempts.")
@@ -664,12 +671,17 @@ delivery that the transport consumes only after a completed response."
         (hint (case status
                 (404 "The requested resource or model is not being served.")
                 (429 "The subscription rate limit was reached; see /status.")
-                ((500 502 503) "The provider service is having trouble.")
+                ((500 502 503 504) "The provider service is having trouble.")
                 (t nil))))
     (format nil "The provider returned HTTP ~D.~@[ ~A~]~@[~%~A~]"
             status
             hint
             detail)))
+
+(-> provider--retryable-http-status-p (integer) boolean)
+(defun provider--retryable-http-status-p (status)
+  "Return true when provider HTTP STATUS describes a transient failure."
+  (not (null (member status *provider-retryable-http-statuses* :test #'=))))
 
 (-> provider-signal-http-failure
     (codex-subscription-provider http-request-failed)
@@ -694,7 +706,9 @@ delivery that the transport consumes only after a completed response."
                :status status
                :request-id (response-header headers "x-request-id")
                :response nil)
-        (error 'provider-error
+        (error (if (provider--retryable-http-status-p status)
+                   'provider-retryable-error
+                   'provider-error)
                :message (provider--http-error-message status body)
                :status status
                :request-id (response-header headers "x-request-id")
@@ -1038,7 +1052,9 @@ delivery that the transport consumes only after a completed response."
                        (response-header headers "x-request-id")
                        :response nil)
                       (error
-                       'provider-error
+                       (if (provider--retryable-http-status-p status)
+                           'provider-retryable-error
+                           'provider-error)
                        :message (provider--http-error-message status body)
                        :status status
                        :request-id
