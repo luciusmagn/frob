@@ -61,6 +61,12 @@
 (defparameter *fs-read-default-line-count* 400
   "The file lines returned by fs.read when no window is given.")
 
+(defparameter *fs-read-stream-buffer-characters* 65536
+  "The reusable character buffer used while fs.read scans a file.")
+
+(defparameter *fs-read-maximum-result-characters* 8000
+  "The maximum characters fs.read constructs for one model-visible result.")
+
 (defparameter *shell-default-timeout-seconds* 60
   "The seconds one shell.run command may take by default.")
 
@@ -143,6 +149,179 @@ through private image commits instead."
 
 ;;;; -- Tool Executions --
 
+(-> workspace--read-file-window
+    (pathname (integer 1) (integer 1))
+    (values string (integer 0) boolean))
+(defun workspace--read-file-window (path start-line line-count)
+  "Stream PATH and return its numbered window, total lines, and truncation flag.
+
+The returned body never exceeds `*fs-read-maximum-result-characters*`.
+The complete stream is still scanned so the total remains exact. A file
+ending in a newline has no additional empty line, matching fs.read's
+historical line-window behavior, and an empty file has zero lines."
+  (let ((buffer
+          (make-string (max 1 *fs-read-stream-buffer-characters*)))
+        (body
+          (make-array (max 1 *fs-read-maximum-result-characters*)
+                      :element-type 'character
+                      :fill-pointer 0))
+        (end-line-exclusive (+ start-line line-count))
+        (current-line 1)
+        (captured-lines 0)
+        (line-started-p nil)
+        (saw-character-p nil)
+        (last-character-newline-p nil)
+        (truncated-p nil))
+    (labels ((capture-character (character)
+               "Append CHARACTER while the bounded result body has room."
+               (if (< (fill-pointer body) (array-total-size body))
+                   (vector-push character body)
+                   (setf truncated-p t)))
+
+             (capture-string (text)
+               "Append TEXT through the bounded character writer."
+               (loop for character across text
+                     until truncated-p
+                     do (capture-character character)))
+
+             (begin-selected-line ()
+               "Start the numbered representation of the current selected line."
+               (unless line-started-p
+                 (setf line-started-p t)
+                 (unless truncated-p
+                   (when (plusp captured-lines)
+                     (capture-character #\Newline))
+                   (capture-string (format nil "~4D  " current-line))
+                   (incf captured-lines))))
+
+             (skip-chunk-rest (start end)
+               "Count newlines from START through END without retaining text."
+               (incf current-line
+                     (count #\Newline buffer :start start :end end))))
+      (with-open-file (stream path
+                              :direction :input
+                              :external-format :utf-8)
+        (loop
+          for count = (read-sequence buffer stream)
+          until (zerop count)
+          do
+             (setf saw-character-p t
+                   last-character-newline-p
+                   (char= (char buffer (1- count)) #\Newline))
+             (let ((cursor 0))
+               (loop
+                 while (and (< current-line start-line)
+                            (< cursor count))
+                 for newline = (position #\Newline
+                                         buffer
+                                         :start cursor
+                                         :end count)
+                 do
+                    (if newline
+                        (progn
+                          (incf current-line)
+                          (setf cursor (1+ newline)))
+                        (setf cursor count)))
+               (loop while (< cursor count)
+                     do
+                        (cond
+                          ((or truncated-p
+                               (>= current-line end-line-exclusive))
+                           (skip-chunk-rest cursor count)
+                           (setf cursor count))
+                          (t
+                           (let ((character (char buffer cursor)))
+                             (begin-selected-line)
+                             (unless (char= character #\Newline)
+                               (capture-character character))
+                             (incf cursor)
+                             (when (char= character #\Newline)
+                               (incf current-line)
+                               (setf line-started-p nil)))))))))
+      (values
+       (coerce body 'string)
+       (cond
+         ((not saw-character-p)
+          0)
+         (last-character-newline-p
+          (1- current-line))
+         (t
+          current-line))
+       truncated-p))))
+
+(-> workspace--bounded-path-label (pathname (integer 0)) string)
+(defun workspace--bounded-path-label (path maximum)
+  "Return PATH's namestring bounded to MAXIMUM characters."
+  (let ((label (namestring path)))
+    (cond
+      ((<= (length label) maximum)
+       label)
+      ((<= maximum 3)
+       (subseq label 0 maximum))
+      (t
+       (format nil "~A..."
+               (subseq label 0 (- maximum 3)))))))
+
+(-> workspace--fs-read-result-content
+    (pathname string
+     &key (:first-line (integer 1))
+          (:last-line (integer 0))
+          (:total-lines (integer 0))
+          (:body-truncated-p boolean))
+    string)
+(defun workspace--fs-read-result-content
+    (path body
+     &key first-line last-line total-lines body-truncated-p)
+  "Return one fully bounded and honestly labeled fs.read result.
+
+A truncated result labels its line interval as the requested window. The
+path label yields space before selected text does, and the truncation marker
+is retained whenever the configured maximum can contain the fixed metadata."
+  (let* ((maximum (max 1 *fs-read-maximum-result-characters*))
+         (path-label (namestring path))
+         (ordinary-suffix
+           (format nil " lines ~D-~D of ~D"
+                   first-line
+                   last-line
+                   total-lines))
+         (ordinary-header
+           (format nil "~A~A" path-label ordinary-suffix))
+         (ordinary-length
+           (+ (length ordinary-header) 1 (length body)))
+         (truncated-p
+           (or body-truncated-p (> ordinary-length maximum))))
+    (if (not truncated-p)
+        (format nil "~A~%~A" ordinary-header body)
+        (let* ((marker
+                 "... fs.read output truncated; request a smaller line window.")
+               (suffix
+                 (format nil " requested lines ~D-~D of ~D"
+                         first-line
+                         last-line
+                         total-lines))
+               (fixed-length (+ (length suffix) 1 (length marker))))
+          (if (> fixed-length maximum)
+              (let ((fallback (format nil "~A~%~A" marker suffix)))
+                (subseq fallback 0 (min maximum (length fallback))))
+              (let* ((path-maximum (- maximum fixed-length))
+                     (visible-path
+                       (workspace--bounded-path-label path path-maximum))
+                     (header (format nil "~A~A" visible-path suffix))
+                     (body-maximum
+                       (max 0
+                            (- maximum
+                               (length header)
+                               (length marker)
+                               2)))
+                     (visible-body
+                       (subseq body 0 (min body-maximum (length body)))))
+                (if (plusp (length visible-body))
+                    (format nil "~A~%~A~%~A"
+                            header
+                            visible-body
+                            marker)
+                    (format nil "~A~%~A" header marker))))))))
+
 (defmethod tool-execute ((tool fs-view-image-tool)
                          (context tool-context)
                          (arguments hash-table))
@@ -183,24 +362,18 @@ through private image commits instead."
       ((not (probe-file path))
        (tool-failure (format nil "~A does not exist." path)))
       (t
-       (let* ((split (uiop:split-string (uiop:read-file-string path)
-                                        :separator '(#\Newline)))
-              (lines (if (and (rest split)
-                              (string= (first (last split)) ""))
-                         (butlast split)
-                         split))
-              (total (length lines))
-              (window-start (min (1- start-line) total))
-              (window-end (min (+ window-start line-count) total)))
-         (tool-success
-          (format nil "~A lines ~D-~D of ~D~%~{~A~^~%~}"
-                  path
-                  (1+ window-start)
-                  window-end
-                  total
-                  (loop for line in (subseq lines window-start window-end)
-                        for number from (1+ window-start)
-                        collect (format nil "~4D  ~A" number line)))))))))
+       (multiple-value-bind (body total body-truncated-p)
+           (workspace--read-file-window path start-line line-count)
+         (let* ((window-start (min (1- start-line) total))
+                (window-end (min (+ window-start line-count) total)))
+           (tool-success
+            (workspace--fs-read-result-content
+             path
+             body
+             :first-line (1+ window-start)
+             :last-line window-end
+             :total-lines total
+             :body-truncated-p body-truncated-p))))))))
 
 (defmethod tool-execute ((tool fs-list-tool)
                          (context tool-context)

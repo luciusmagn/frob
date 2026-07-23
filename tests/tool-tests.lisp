@@ -220,6 +220,174 @@
                    "runtime restart restores dependencies before dependents")))
   nil)
 
+(-> test-fs-read-streaming () null)
+(defun test-fs-read-streaming ()
+  "Test bounded fs.read windows across large and malformed files."
+  (let* ((registry (make-default-tool-registry))
+         (configuration (test-configuration))
+         (root (test-configuration-root configuration)))
+    (unwind-protect
+         (let* ((conversation
+                  (conversation-create configuration
+                                       :identifier "fs-read-streaming"))
+                (context
+                  (make-instance 'tool-context
+                                 :configuration configuration
+                                 :worker nil
+                                 :conversation conversation)))
+           (labels ((run (path start-line line-count)
+                      "Read one explicit line window from PATH."
+                      (tool-registry-execute-call
+                       registry
+                       (json-object
+                        "namespace" "fs"
+                        "name" "read"
+                        "arguments"
+                        (json-encode
+                         (json-object
+                          "path" (namestring path)
+                          "start-line" start-line
+                          "line-count" line-count)))
+                       context)))
+             (let ((many-lines (merge-pathnames "many-lines.txt" root)))
+               (with-open-file (stream many-lines
+                                       :direction :output
+                                       :if-exists :supersede
+                                       :if-does-not-exist :create
+                                       :external-format :utf-8)
+                 (loop for line-number from 1 to 120000
+                       do (format stream "row ~D~%" line-number)))
+               (let* ((*fs-read-stream-buffer-characters* 257)
+                      (result (run many-lines 119999 2)))
+                 (test-assert
+                  (tool-result-success-p result)
+                  "fs.read streams a late window from a large line sequence")
+                 (test-assert
+                  (search "lines 119999-120000 of 120000"
+                          (tool-result-content result))
+                  "streamed fs.read preserves exact total and window metadata")
+                 (test-assert
+                  (and (search "119999  row 119999"
+                               (tool-result-content result))
+                       (search "120000  row 120000"
+                               (tool-result-content result)))
+                  "streamed fs.read numbers late lines across small buffers")))
+             (let ((empty (merge-pathnames "empty.txt" root)))
+               (with-open-file (stream empty
+                                       :direction :output
+                                       :if-exists :supersede
+                                       :if-does-not-exist :create
+                                       :external-format :utf-8)
+                 (declare (ignore stream)))
+               (let ((result (run empty 1 1)))
+                 (test-assert
+                  (and (tool-result-success-p result)
+                       (search "lines 1-0 of 0"
+                               (tool-result-content result))
+                       (not (search "   1  "
+                                    (tool-result-content result))))
+                  "streamed fs.read preserves empty-file line semantics")))
+             (let ((long-line (merge-pathnames "long-line.txt" root))
+                   (chunk (make-string 8192 :initial-element #\x)))
+               (with-open-file (stream long-line
+                                       :direction :output
+                                       :if-exists :supersede
+                                       :if-does-not-exist :create
+                                       :external-format :utf-8)
+                 (dotimes (index 256)
+                   (declare (ignore index))
+                   (write-string chunk stream))
+                 (format stream "~%tail marker~%"))
+               (let* ((*fs-read-stream-buffer-characters* 4096)
+                      (*fs-read-maximum-result-characters* 512)
+                      (result (run long-line 1 1))
+                      (content (tool-result-content result)))
+                 (test-assert
+                  (tool-result-success-p result)
+                  "fs.read bounds a selected multi-megabyte line")
+                 (test-assert
+                  (<= (length content)
+                      *fs-read-maximum-result-characters*)
+                  "fs.read constructs no oversized result for a long line")
+                 (test-assert
+                  (search "fs.read output truncated" content)
+                  "fs.read explains selected-line truncation")
+                 (test-assert
+                  (search "requested lines 1-1 of 2" content)
+                  "fs.read labels a truncated interval as the requested window"))
+               (let* ((*fs-read-stream-buffer-characters* 4096)
+                      (result (run long-line 2 1)))
+                 (test-assert
+                  (and (tool-result-success-p result)
+                       (search "lines 2-2 of 2"
+                               (tool-result-content result))
+                       (search "   2  tail marker"
+                               (tool-result-content result)))
+                  "fs.read skips a huge preceding line without retaining it")))
+             (let ((sparse (merge-pathnames "sparse-line.txt" root)))
+               (with-open-file (stream sparse
+                                       :direction :output
+                                       :if-exists :supersede
+                                       :if-does-not-exist :create
+                                       :element-type '(unsigned-byte 8))
+                 (file-position stream (* 8 1024 1024))
+                 (loop for octet across
+                       #(10 115 112 97 114 115 101 32 116 97 105 108 10)
+                       do (write-byte octet stream)))
+               (let* ((*fs-read-stream-buffer-characters* 4096)
+                      (result (run sparse 2 1)))
+                 (test-assert
+                  (and (tool-result-success-p result)
+                       (search "lines 2-2 of 2"
+                               (tool-result-content result))
+                       (search "   2  sparse tail"
+                               (tool-result-content result)))
+                  "fs.read reaches a line after a sparse multi-megabyte prefix")))
+             (let* ((long-name
+                      (format nil "~A.txt"
+                              (make-string 220 :initial-element #\p)))
+                    (long-path (merge-pathnames long-name root)))
+               (with-open-file (stream long-path
+                                       :direction :output
+                                       :if-exists :supersede
+                                       :if-does-not-exist :create
+                                       :external-format :utf-8)
+                 (write-string
+                  (make-string 1024 :initial-element #\x)
+                  stream))
+               (let* ((*fs-read-maximum-result-characters* 256)
+                      (result (run long-path 1 1))
+                      (content (tool-result-content result)))
+                 (test-assert
+                  (and (tool-result-success-p result)
+                       (<= (length content)
+                           *fs-read-maximum-result-characters*))
+                  "fs.read bounds the complete result including a long path")
+                 (test-assert
+                  (and (search "requested lines 1-1 of 1" content)
+                       (search "fs.read output truncated" content))
+                  "fs.read retains honest metadata and its marker with a long path")))
+             (let ((malformed (merge-pathnames "malformed-utf8.txt" root)))
+               (with-open-file (stream malformed
+                                       :direction :output
+                                       :if-exists :supersede
+                                       :if-does-not-exist :create
+                                       :element-type '(unsigned-byte 8))
+                 (write-byte 255 stream)
+                 (write-byte 254 stream))
+               (let ((result (run malformed 1 1)))
+                 (test-assert
+                  (not (tool-result-success-p result))
+                  "fs.read reports malformed UTF-8 as a tool failure")
+                 (test-assert
+                  (search "fs.read failed:" (tool-result-content result))
+                  "fs.read contains malformed input at the tool boundary")))))
+      (tool-registry-close-runtime-state registry)
+      (uiop:delete-directory-tree root
+                                  :validate t
+                                  :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-workspace-tools () null)
 (defun test-workspace-tools ()
   "Test workspace file reading, listing, and bounded shell commands."
@@ -471,4 +639,5 @@
                                                                 repo-root)))))
                   "launcher artifacts stay read-only even while developing")))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  (test-fs-read-streaming)
   nil)
