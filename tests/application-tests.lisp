@@ -2654,6 +2654,112 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-application-busy-conversation-resume () null)
+(defun test-application-busy-conversation-resume ()
+  "Test resume claims ownership before crash repair can mutate a transcript."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (current
+           (conversation-create configuration :identifier "N8vQ2mp"))
+         (target
+           (conversation-create configuration :identifier "M8vQ2mp"))
+         (call
+           (json-object
+            "type" "function_call"
+            "status" "completed"
+            "arguments" "{}"
+            "call_id" "call-busy-resume"
+            "name" "read"
+            "namespace" "fs"))
+         (current-lease nil)
+         (application nil))
+    (unwind-protect
+         (progn
+           (configuration-ensure-directories configuration)
+           (conversation-append-user-message target "inspect the file")
+           (conversation-append-provider-item target call)
+           (setf current-lease
+                 (conversation-lease-acquire
+                  configuration
+                  (conversation-identifier current))
+                 application
+                 (make-instance
+                  'application
+                  :configuration configuration
+                  :conversation current
+                  :conversation-lease current-lease))
+           (let ((before
+                   (uiop:read-file-string
+                    (conversation-pathname target))))
+             (test-conversation--call-with-child-lease
+              configuration
+              (conversation-identifier target)
+              (lambda ()
+                (test-assert
+                 (handler-case
+                     (progn
+                       (application-resume-conversation
+                        application
+                        (conversation-identifier target))
+                       nil)
+                   (conversation-in-use ()
+                     t))
+                 "resume refuses a conversation owned by another process")
+                (test-assert
+                 (string=
+                  before
+                  (uiop:read-file-string
+                   (conversation-pathname target)))
+                 "busy resume does not append interrupted-call repair")))))
+      (when application
+        (application-release-conversation-lease application))
+      (when (and current-lease
+                 (conversation-lease-held-p current-lease))
+        (conversation-lease-release current-lease))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(-> test-application-fresh-conversation-lease-collision () null)
+(defun test-application-fresh-conversation-lease-collision ()
+  "Test fresh application ownership probes another seed after a lease race."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (timestamp 3992846378)
+         (first-identifier
+           (conversation-identifier-from-seed timestamp 0))
+         (second-identifier
+           (conversation-identifier-from-seed timestamp 1)))
+    (unwind-protect
+         (progn
+           (configuration-ensure-directories configuration)
+           (test-conversation--call-with-child-lease
+            configuration
+            first-identifier
+            (lambda ()
+              (let ((*conversation-identifier-random-index-function*
+                      (lambda (limit)
+                        (declare (ignore limit))
+                        0)))
+                (multiple-value-bind (conversation lease acquired-p)
+                    (application--conversation-create-owned
+                     nil configuration :timestamp timestamp)
+                  (unwind-protect
+                       (test-assert
+                        (and
+                         acquired-p
+                         (string=
+                          (conversation-identifier conversation)
+                          second-identifier)
+                         (conversation-lease-matches-p
+                          lease second-identifier)
+                         (not
+                          (probe-file
+                           (conversation-pathname conversation))))
+                        "fresh ownership skips a leased empty identifier")
+                    (conversation-lease-release lease)))))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-application-tool-runtime-lifecycle () null)
 (defun test-application-tool-runtime-lifecycle ()
   "Test conversation switching replaces runtimes before checkpoint detachment."
@@ -2732,13 +2838,25 @@
                (tool-registry-close-runtime-state new-registry)
                (setf (conversation-turn-state second-conversation)
                      "transient-provider-turn-state")
+               (test-assert
+                (conversation-lease-matches-p
+                 (application-conversation-lease application)
+                 (conversation-identifier second-conversation))
+                "the active application owns its installed conversation")
                (checkpoint-detach-state application)
                (test-assert
                 (zerop detach-count)
                 "checkpoint detachment never revisits a retired registry")
                (test-assert
                 (null (conversation-turn-state second-conversation))
-                "checkpoint detachment removes transient provider turn state"))))
+                "checkpoint detachment removes transient provider turn state")
+               (test-assert
+                (and
+                 (null (application-conversation-lease application))
+                 (test-conversation--child-can-acquire-lease-p
+                  configuration
+                  (conversation-identifier second-conversation)))
+                "checkpoint detachment excludes the conversation lease"))))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
@@ -2962,6 +3080,9 @@
                      conversation-registry
                      "transition"
                      "workspace-new"))
+                   (conversation-lease-matches-p
+                    (application-conversation-lease application)
+                    (conversation-identifier second-conversation))
                    (search
                     "conversation-new"
                     (json-encode
@@ -2991,9 +3112,20 @@
                        (active-agent
                          (application-agent application))
                        (active-rendered-sequence
-                         (application-rendered-sequence application)))
+                         (application-rendered-sequence application))
+                       (attempted-lease nil)
+                       (lease-acquire-function
+                         (symbol-function 'conversation-lease-acquire)))
                    (test-call-with-function-replacements
                     (list
+                     (list
+                      'conversation-lease-acquire
+                      (lambda (replacement-configuration identifier)
+                        (setf attempted-lease
+                              (funcall
+                               lease-acquire-function
+                               replacement-configuration
+                               identifier))))
                      (list
                       'application--create-tool-registry
                       (lambda (configuration)
@@ -3027,6 +3159,11 @@
                      (eq (application-agent application) active-agent)
                      (= (application-rendered-sequence application)
                         active-rendered-sequence)
+                     (conversation-lease-matches-p
+                      (application-conversation-lease application)
+                      (conversation-identifier second-conversation))
+                     attempted-lease
+                     (not (conversation-lease-held-p attempted-lease))
                      (zerop conversation-close-count)
                      (eq
                       (task-orchestrator-lifecycle-state
@@ -3039,6 +3176,7 @@
                     "failed conversation preparation leaves the old application live")))))))
       (ignore-errors
         (application-disconnect-task-presentation application))
+      (application-release-conversation-lease application)
       (dolist (registry (remove-duplicates owned-registries :test #'eq))
         (ignore-errors
           (tool-registry-close-runtime-state registry)))
@@ -3286,8 +3424,12 @@
                   created-registry
                   created-worker
                   registry-closed-p
-                  worker-stopped-p)
-             "late construction failure closes its registry and worker")
+                  worker-stopped-p
+                  (not
+                   (conversation-lease-held-p
+                    (application-conversation-lease
+                     constructed-application))))
+             "late construction failure closes its registry, worker, and lease")
             (test-assert
              (and
               (null
@@ -4263,6 +4405,8 @@
   (test-late-steering-promotion)
   (test-conversation-picker)
   (test-working-directory-switch)
+  (test-application-busy-conversation-resume)
+  (test-application-fresh-conversation-lease-collision)
   (test-application-tool-runtime-lifecycle)
   (test-application-runtime-replacement-transactions)
   (test-application-runtime-retirement-failures)

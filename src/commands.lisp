@@ -997,9 +997,7 @@ when ITEMS is empty, and returns NIL when the picker is cancelled."
                 :empty-notice "No saved conversations exist."))))
     (setf (application-project-adaptation-offer-p application) nil)
     (when identifier
-      (application-install-conversation
-       application
-       (conversation-load-by-id configuration identifier))
+      (application-resume-conversation application identifier)
       (application-render-records application)
       (when startup-offer-p
         (application-maybe-offer-project-adaptation application))))

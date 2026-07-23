@@ -116,6 +116,171 @@
   "Keep CONVERSATION's projection tail synchronized after whole-list replacement."
   (setf (conversation-input-items-tail conversation) (last items)))
 
+
+;;;; -- Primary Application Ownership --
+
+(defclass conversation-lease ()
+  ((identifier
+    :initarg :identifier
+    :reader conversation-lease-identifier
+    :type non-empty-string
+    :documentation "The normalized conversation identifier held by this lease.")
+   (pathname
+    :initarg :pathname
+    :reader conversation-lease-pathname
+    :type pathname
+    :documentation "The persistent file carrying the process-shared advisory lock.")
+   (descriptor
+    :initarg :descriptor
+    :accessor conversation-lease-descriptor
+    :type (option integer)
+    :documentation "The open descriptor holding the advisory lock, or NIL after release."))
+  (:documentation
+   "A process-lifetime exclusive lease on one primary conversation."))
+
+(defvar *conversation-lease-lock*
+  (make-lock "Autolith conversation leases")
+  "Serialize process-local lease registration and descriptor release.")
+
+(defvar *conversation-leases*
+  (make-hash-table :test #'equal)
+  "Map lease pathnames to held primary-conversation leases in this process.")
+
+(-> conversation--lease-pathname (configuration string) pathname)
+(defun conversation--lease-pathname (configuration identifier)
+  "Return the process-shared lease pathname for normalized IDENTIFIER."
+  (merge-pathnames
+   (make-pathname :name identifier :type "lock")
+   (merge-pathnames
+    "conversation-leases/"
+    (configuration-state-root configuration))))
+
+(-> conversation--lease-in-use (string pathname pathname) null)
+(defun conversation--lease-in-use
+    (identifier conversation-pathname lease-pathname)
+  "Signal that normalized IDENTIFIER already has a live primary owner."
+  (error
+   'conversation-in-use
+   :message
+   (format
+    nil
+    "Conversation ~A is already active in another Autolith process."
+    (conversation-identifier-display identifier))
+   :pathname conversation-pathname
+   :sequence nil
+   :identifier identifier
+   :lease-pathname lease-pathname))
+
+(-> conversation-lease-held-p (conversation-lease) boolean)
+(defun conversation-lease-held-p (lease)
+  "Return true when LEASE still owns an open lock descriptor."
+  (not (null (conversation-lease-descriptor lease))))
+
+(-> conversation-lease-matches-p (conversation-lease string) boolean)
+(defun conversation-lease-matches-p (lease identifier)
+  "Return true when held LEASE owns normalized IDENTIFIER."
+  (and (conversation-lease-held-p lease)
+       (string= (conversation-lease-identifier lease) identifier)))
+
+(-> conversation-lease-acquire (configuration string) conversation-lease)
+(defun conversation-lease-acquire (configuration identifier)
+  "Acquire the primary process lease for IDENTIFIER without waiting.
+
+The kernel lock is authoritative. Its empty file may remain after normal exit
+or a crash, and a later process can immediately reuse it after the former
+owner has exited."
+  (let* ((normalized
+           (conversation-identifier-migration-resolve
+            configuration identifier))
+         (conversation-pathname
+           (conversation-pathname-for-id configuration normalized))
+         (lease-pathname
+           (conversation--lease-pathname configuration normalized))
+         (lease-key (namestring lease-pathname))
+         (descriptor nil)
+         (acquired-p nil))
+    (with-lock-held (*conversation-lease-lock*)
+      (let ((existing (gethash lease-key *conversation-leases*)))
+        (when (and existing (conversation-lease-held-p existing))
+          (conversation--lease-in-use
+           normalized conversation-pathname lease-pathname))
+        (when existing
+          (remhash lease-key *conversation-leases*)))
+      (unwind-protect
+           (handler-case
+               (progn
+                 (ensure-directories-exist lease-pathname)
+                 (setf descriptor
+                       (sb-posix:open
+                        (namestring lease-pathname)
+                        (logior sb-posix:o-creat sb-posix:o-rdwr)
+                        #o600))
+                 (sb-posix:lockf descriptor sb-posix:f-tlock 0)
+                 (let ((lease
+                         (make-instance
+                          'conversation-lease
+                          :identifier normalized
+                          :pathname lease-pathname
+                          :descriptor descriptor)))
+                   (setf acquired-p t
+                         (gethash lease-key *conversation-leases*) lease)
+                   lease))
+             (sb-posix:syscall-error (condition)
+               (if (and
+                    descriptor
+                    (member
+                     (sb-posix:syscall-errno condition)
+                     (list sb-posix:eacces sb-posix:eagain)))
+                   (conversation--lease-in-use
+                    normalized conversation-pathname lease-pathname)
+                   (error
+                    'conversation-invariant-error
+                    :message
+                    (format nil
+                            "Could not claim conversation ~A: ~A"
+                            (conversation-identifier-display normalized)
+                            condition)
+                    :pathname conversation-pathname
+                    :sequence nil)))
+             (conversation-error (condition)
+               (error condition))
+             (error (condition)
+               (error
+                'conversation-invariant-error
+                :message
+                (format nil
+                        "Could not claim conversation ~A: ~A"
+                        (conversation-identifier-display normalized)
+                        condition)
+                :pathname conversation-pathname
+                :sequence nil)))
+        (unless acquired-p
+          (when descriptor
+            (ignore-errors
+              (sb-posix:close descriptor))))))))
+
+(-> conversation-lease-release (conversation-lease) null)
+(defun conversation-lease-release (lease)
+  "Release LEASE idempotently.
+
+Closing the descriptor is the final authority even when an explicit unlock
+reports an operating-system failure."
+  (with-lock-held (*conversation-lease-lock*)
+    (let ((descriptor (conversation-lease-descriptor lease))
+          (lease-key (namestring (conversation-lease-pathname lease))))
+      (when descriptor
+        (when (eq (gethash lease-key *conversation-leases*) lease)
+          (remhash lease-key *conversation-leases*))
+        (setf (conversation-lease-descriptor lease) nil)
+        (ignore-errors
+          (sb-posix:lockf descriptor sb-posix:f-ulock 0))
+        (ignore-errors
+          (sb-posix:close descriptor)))))
+  nil)
+
+
+;;;; -- Durable Projection --
+
 (-> conversation--note-activity (conversation list) null)
 (defun conversation--note-activity (conversation record)
   "Project RECORD's activity metadata into CONVERSATION."
@@ -159,11 +324,13 @@
 
 (-> conversation-create
     (configuration &key (:identifier (option string))
-                        (:storage-root (option pathname)))
+                        (:storage-root (option pathname))
+                        (:created-at (option timestamp)))
     conversation)
-(defun conversation-create (configuration &key identifier storage-root)
+(defun conversation-create
+    (configuration &key identifier storage-root created-at)
   "Create an in-memory conversation that persists under optional STORAGE-ROOT."
-  (let* ((created-at (get-universal-time))
+  (let* ((created-at (or created-at (get-universal-time)))
          (root (uiop:ensure-directory-pathname
                 (or storage-root
                     (configuration-conversation-root configuration))))
@@ -586,9 +753,17 @@
     (conversation list)
     (values hash-table hash-table))
 (defun conversation--tool-item-tables (conversation items)
-  "Return unique function calls and correlated outputs found in ITEMS."
+  "Return unique function calls and the first correlated outputs in ITEMS.
+
+A late writer can append a real tool result after crash recovery has already
+recorded an unknown-outcome result and continued the conversation. Tolerate
+only that recognizable ordering and preserve the repair because subsequent
+history was produced from its projection.  The late result remains in the
+append-only log but must not enter provider replay."
   (let ((calls (make-hash-table :test #'equal))
-        (outputs (make-hash-table :test #'equal)))
+        (outputs (make-hash-table :test #'equal))
+        (outputs-after-call-p (make-hash-table :test #'equal))
+        (stale-output-tolerated-p (make-hash-table :test #'equal)))
     (dolist (item items)
       (when (json-object-p item)
         (cond
@@ -604,14 +779,33 @@
              (setf (gethash call-id calls) item)))
           ((conversation--wire-item-type-p item "function_call_output")
            (let ((call-id (conversation--tool-call-id conversation item)))
-             (when (gethash call-id outputs)
-               (error 'conversation-invariant-error
-                      :message
-                      (format nil "Persisted history repeats output for tool call ~S."
-                              call-id)
-                      :pathname (conversation-pathname conversation)
-                      :sequence nil))
-             (setf (gethash call-id outputs) item))))))
+             (multiple-value-bind (existing present-p)
+                 (gethash call-id outputs)
+               (if (not present-p)
+                   (setf (gethash call-id outputs) item
+                         (gethash call-id outputs-after-call-p)
+                         (not (null (gethash call-id calls))))
+                   (let ((existing-output (json-get existing "output")))
+                     (if (and
+                          (gethash call-id outputs-after-call-p)
+                          (not
+                           (gethash call-id stale-output-tolerated-p))
+                          (stringp existing-output)
+                          (string=
+                           existing-output
+                           *conversation-interrupted-tool-output*))
+                         (setf
+                          (gethash call-id stale-output-tolerated-p)
+                          t)
+                         (error
+                          'conversation-invariant-error
+                          :message
+                          (format
+                           nil
+                           "Persisted history repeats output for tool call ~S."
+                           call-id)
+                          :pathname (conversation-pathname conversation)
+                          :sequence nil))))))))))
     (values calls outputs)))
 
 (-> conversation--repair-incomplete-tool-calls (conversation) null)

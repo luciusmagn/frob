@@ -13,6 +13,12 @@
     :accessor application-conversation
     :type conversation
     :documentation "The durable conversation currently shown to the user.")
+   (conversation-lease
+    :initarg :conversation-lease
+    :initform nil
+    :accessor application-conversation-lease
+    :type (option conversation-lease)
+    :documentation "The process-lifetime exclusive lease on the primary conversation.")
    (provider
     :initarg :provider
     :accessor application-provider
@@ -560,6 +566,86 @@
           (error failure))))
   nil)
 
+(-> application--conversation-lease-select
+    ((option application) configuration string)
+    (values conversation-lease boolean))
+(defun application--conversation-lease-select
+    (application configuration identifier)
+  "Return IDENTIFIER's held or newly acquired application lease.
+
+The second value is true only when the caller owns cleanup of a newly acquired
+lease."
+  (let* ((normalized
+           (conversation-identifier-migration-resolve
+            configuration identifier))
+         (current
+           (and application
+                (slot-boundp application 'conversation-lease)
+                (application-conversation-lease application))))
+    (if (and current
+             (conversation-lease-matches-p current normalized))
+        (values current nil)
+        (values
+         (conversation-lease-acquire configuration normalized)
+         t))))
+
+(-> application--conversation-load-owned
+    ((option application) configuration string)
+    (values conversation conversation-lease boolean))
+(defun application--conversation-load-owned
+    (application configuration identifier)
+  "Claim IDENTIFIER before loading and possibly repairing its conversation.
+
+Return the conversation, its lease, and whether the caller owns cleanup of a
+newly acquired lease."
+  (multiple-value-bind (lease acquired-p)
+      (application--conversation-lease-select
+       application configuration identifier)
+    (let ((completed-p nil))
+      (unwind-protect
+           (let ((conversation
+                   (conversation-load-by-id configuration identifier)))
+             (setf completed-p t)
+             (values conversation lease acquired-p))
+        (unless completed-p
+          (when acquired-p
+            (conversation-lease-release lease)))))))
+
+(-> application--conversation-create-owned
+    ((option application) configuration
+     &key (:timestamp (option timestamp)))
+    (values conversation conversation-lease boolean))
+(defun application--conversation-create-owned
+    (application configuration &key timestamp)
+  "Create and claim a fresh conversation, probing another seed on lease races."
+  (let ((last-conflict nil)
+        (created-at (or timestamp (get-universal-time))))
+    (loop repeat (conversation-identifier-base)
+          do (let ((conversation
+                     (conversation-create
+                      configuration :created-at created-at)))
+               (handler-case
+                   (multiple-value-bind (lease acquired-p)
+                       (application--conversation-lease-select
+                        application
+                        configuration
+                        (conversation-identifier conversation))
+                     (return-from application--conversation-create-owned
+                       (values conversation lease acquired-p)))
+                 (conversation-in-use (condition)
+                   (setf last-conflict condition)))))
+    (error last-conflict)))
+
+(-> application-release-conversation-lease (application) null)
+(defun application-release-conversation-lease (application)
+  "Release APPLICATION's primary conversation lease idempotently."
+  (when (slot-boundp application 'conversation-lease)
+    (let ((lease (application-conversation-lease application)))
+      (when lease
+        (setf (application-conversation-lease application) nil)
+        (conversation-lease-release lease))))
+  nil)
+
 (-> application-create
     (configuration &key (:conversation-id (option string)))
     application)
@@ -577,6 +663,9 @@
            (command-registration-snapshot nil)
            (registry nil)
            (worker nil)
+           (conversation nil)
+           (conversation-lease nil)
+           (conversation-lease-acquired-p nil)
            (application nil)
            (completed-p nil))
       (unwind-protect
@@ -590,6 +679,15 @@
                   (progn
                     (mcp-configuration-load preferred-configuration)
                     (user-init-load preferred-configuration)
+                    (multiple-value-setq
+                        (conversation
+                         conversation-lease
+                         conversation-lease-acquired-p)
+                      (if conversation-id
+                          (application--conversation-load-owned
+                           nil preferred-configuration conversation-id)
+                          (application--conversation-create-owned
+                           nil preferred-configuration)))
                     (let* ((reasoning-traces-p
                              (preferences-reasoning-traces-p
                               preferred-configuration))
@@ -598,12 +696,6 @@
                               preferred-configuration))
                            (permission-state
                              (permissions-load preferred-configuration))
-                           (conversation
-                             (if conversation-id
-                                 (conversation-load-by-id
-                                  preferred-configuration conversation-id)
-                                 (conversation-create
-                                  preferred-configuration)))
                            (configuration
                              (application--configuration-for-conversation
                               preferred-configuration
@@ -634,6 +726,7 @@
                                'application
                                :configuration configuration
                                :conversation conversation
+                               :conversation-lease conversation-lease
                                :provider provider
                                :tool-registry registry
                                :worker worker
@@ -659,7 +752,9 @@
                   command-registration-snapshot))))
         (unless completed-p
           (application--discard-connection-resources
-           application registry worker))))))
+           application registry worker)
+          (when conversation-lease-acquired-p
+            (conversation-lease-release conversation-lease)))))))
 
 (-> application--normalize-recovery-cursors
     (conversation boolean (option integer) (option integer))
@@ -695,11 +790,16 @@
                immutable-p
                (configuration-immutable-p previous)))
          (retained-conversation (application-conversation application))
+         (retained-conversation-lease
+           (and (slot-boundp application 'conversation-lease)
+                (application-conversation-lease application)))
          (mcp-registration-snapshot nil)
          (context-registration-snapshot nil)
          (command-registration-snapshot nil)
          (registry nil)
          (worker nil)
+         (selected-conversation-lease nil)
+         (selected-conversation-lease-acquired-p nil)
          (new-application nil)
          (old-registry (application-tool-registry application))
          (retirement-started-p nil)
@@ -742,19 +842,30 @@
                            "AUTOLITH_RECOVERY_CONVERSATION_ID")))
                     (and (non-empty-string-p value) value)))
                 (conversation
-                  (cond
-                    (recovery-conversation-id
-                     (conversation-load-by-id
-                      prepared-configuration recovery-conversation-id))
-                    (conversation-id
-                     (conversation-load-by-id
-                      prepared-configuration conversation-id))
-                    ((conversation-persisted-p retained-conversation)
-                     (conversation-load-by-id
-                      prepared-configuration
-                      (conversation-identifier retained-conversation)))
-                    (t
-                     (conversation-create prepared-configuration))))
+                  (multiple-value-bind
+                      (owned-conversation lease acquired-p)
+                      (cond
+                        (recovery-conversation-id
+                         (application--conversation-load-owned
+                          application
+                          prepared-configuration
+                          recovery-conversation-id))
+                        (conversation-id
+                         (application--conversation-load-owned
+                          application
+                          prepared-configuration
+                          conversation-id))
+                        ((conversation-persisted-p retained-conversation)
+                         (application--conversation-load-owned
+                          application
+                          prepared-configuration
+                          (conversation-identifier retained-conversation)))
+                        (t
+                         (application--conversation-create-owned
+                          application prepared-configuration)))
+                    (setf selected-conversation-lease lease
+                          selected-conversation-lease-acquired-p acquired-p)
+                    owned-conversation))
                 (configuration
                   (application--configuration-for-conversation
                    prepared-configuration
@@ -814,6 +925,7 @@
                     'application
                     :configuration configuration
                     :conversation conversation
+                    :conversation-lease selected-conversation-lease
                     :provider provider
                     :tool-registry registry
                     :worker worker
@@ -856,13 +968,19 @@
              (setf failure-stage ':install)
              (application-connect-task-presentation new-application)
              (context-runtime-reset)
+             (application-publish-recovery-session new-application)
              (setf completed-p t)
+             (when (and retained-conversation-lease
+                        (not
+                         (eq retained-conversation-lease
+                             selected-conversation-lease)))
+               (conversation-lease-release retained-conversation-lease)
+               (setf (application-conversation-lease application) nil))
              (when (and (slot-boundp application 'worker)
                         (application-worker application))
                (ignore-errors
                  (lisp-worker-manager-stop
                   (application-worker application))))
-             (application-publish-recovery-session new-application)
              new-application))
              (unless completed-p
                (mcp--registry-restore mcp-registration-snapshot)
@@ -873,6 +991,8 @@
             (setf rollback-failures
                   (application--discard-connection-resources
                    new-application registry worker))
+            (when selected-conversation-lease-acquired-p
+              (conversation-lease-release selected-conversation-lease))
             (when retirement-started-p
               (setf rollback-failures
                     (nconc
@@ -912,6 +1032,7 @@
   (let ((conversation (application-conversation application)))
     (setf (conversation-turn-state conversation) nil)
     (conversation-clear-ephemeral-input-items conversation))
+  (application-release-conversation-lease application)
   (tool-registry-detach-runtime-state
    (application-tool-registry application))
   (setf (application-provider application) nil
@@ -1130,15 +1251,21 @@
        :rollback-cause (nreverse rollback-failures)))
     directory))
 
-(-> application-install-conversation (application conversation) application)
-(defun application-install-conversation (application conversation)
-  "Atomically install CONVERSATION with a fresh tool runtime and agent."
+(-> application--install-owned-conversation
+    (application conversation &key (:conversation-lease conversation-lease))
+    application)
+(defun application--install-owned-conversation
+    (application conversation &key conversation-lease)
+  "Atomically install owned CONVERSATION with a fresh tool runtime and agent."
   (let* ((configuration
            (application--configuration-for-conversation
             (application-configuration application)
             conversation))
          (previous-configuration (application-configuration application))
          (previous-conversation (application-conversation application))
+         (previous-conversation-lease
+           (and (slot-boundp application 'conversation-lease)
+                (application-conversation-lease application)))
          (previous-provider (application-provider application))
          (previous-registry (application-tool-registry application))
          (previous-agent (application-agent application))
@@ -1183,6 +1310,8 @@
                      application-swapped-p t)
                (setf (application-configuration application) configuration
                      (application-conversation application) conversation
+                     (application-conversation-lease application)
+                     conversation-lease
                      (application-provider application) provider
                      (application-tool-registry application) registry
                      (application-agent application) agent)
@@ -1209,6 +1338,8 @@
                 previous-configuration
                 (application-conversation application)
                 previous-conversation
+                (application-conversation-lease application)
+                previous-conversation-lease
                 (application-provider application)
                 previous-provider
                 (application-tool-registry application)
@@ -1247,7 +1378,47 @@
        :stage failure-stage
        :cause failure
        :rollback-causes rollback-failures))
+    (when (and previous-conversation-lease
+               (not
+                (eq previous-conversation-lease conversation-lease)))
+      (conversation-lease-release previous-conversation-lease))
     application))
+
+(-> application-install-conversation (application conversation) application)
+(defun application-install-conversation (application conversation)
+  "Claim and atomically install CONVERSATION with a fresh runtime and agent."
+  (multiple-value-bind (lease acquired-p)
+      (application--conversation-lease-select
+       application
+       (application-configuration application)
+       (conversation-identifier conversation))
+    (let ((completed-p nil))
+      (unwind-protect
+           (prog1
+               (application--install-owned-conversation
+                application conversation :conversation-lease lease)
+             (setf completed-p t))
+        (unless completed-p
+          (when acquired-p
+            (conversation-lease-release lease)))))))
+
+(-> application-resume-conversation (application string) application)
+(defun application-resume-conversation (application identifier)
+  "Claim IDENTIFIER before loading and atomically install its conversation."
+  (multiple-value-bind (conversation lease acquired-p)
+      (application--conversation-load-owned
+       application
+       (application-configuration application)
+       identifier)
+    (let ((completed-p nil))
+      (unwind-protect
+           (prog1
+               (application--install-owned-conversation
+                application conversation :conversation-lease lease)
+             (setf completed-p t))
+        (unless completed-p
+          (when acquired-p
+            (conversation-lease-release lease)))))))
 
 
 ;;;; -- Transcript Projection --

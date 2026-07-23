@@ -534,6 +534,133 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-conversation-late-duplicate-tool-output () null)
+(defun test-conversation-late-duplicate-tool-output ()
+  "Test replay keeps the result used before a stale writer appended another."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration :identifier "duplicate-output"))
+         (call
+           (json-object
+            "type" "function_call"
+            "status" "completed"
+            "arguments" "{}"
+            "call_id" "call-duplicate"
+            "name" "run"
+            "namespace" "shell")))
+    (unwind-protect
+         (progn
+           (conversation-append-user-message conversation "run the check")
+           (conversation-append-provider-item conversation call)
+           (conversation-append-tool-result
+            conversation
+            "call-duplicate"
+            :tool-name "shell.run"
+            :output *conversation-interrupted-tool-output*
+            :success-p nil)
+           (conversation-append-user-message conversation "continue")
+           (log-append
+            (conversation-pathname conversation)
+            `(:tool-result
+              :seq 3
+              :time ,(get-universal-time)
+              :call-id "call-duplicate"
+              :tool "shell.run"
+              :status :error
+              :output "The user denied this command."
+              :wire-json
+              ,(json-encode
+                (function-call-output-item
+                 "call-duplicate"
+                 "The user denied this command."))))
+           (let* ((record-count
+                    (length
+                     (conversation--read-records
+                      (conversation-pathname conversation))))
+                  (loaded
+                    (conversation-load-by-id configuration "duplicate-output"))
+                  (items (conversation-input-items loaded))
+                  (outputs
+                    (remove-if-not
+                     (lambda (item)
+                       (and
+                        (json-object-p item)
+                        (conversation--wire-item-type-p
+                         item "function_call_output")))
+                     items)))
+             (test-assert
+              (and (= (length outputs) 1)
+                   (string=
+                    (json-get (first outputs) "output")
+                    *conversation-interrupted-tool-output*))
+              "replay keeps the first tool output used by subsequent history")
+             (test-assert
+              (= (length
+                  (conversation--read-records
+                   (conversation-pathname loaded)))
+                 record-count)
+              "replay leaves the stale duplicate only in the append-only log")
+             (test-assert
+              (string= (json-get (fourth items) "role") "user")
+              "replay retains history produced after the selected output")
+             (test-assert
+              (handler-case
+                  (progn
+                    (conversation--tool-item-tables
+                     loaded
+                     (list
+                      call
+                      (function-call-output-item
+                       "call-duplicate"
+                       "first ordinary result")
+                      (function-call-output-item
+                       "call-duplicate"
+                       "second ordinary result")))
+                    nil)
+                (conversation-invariant-error ()
+                  t))
+              "replay rejects arbitrary conflicting tool outputs")
+             (test-assert
+              (handler-case
+                  (progn
+                    (conversation--tool-item-tables
+                     loaded
+                     (list
+                      call
+                      (function-call-output-item
+                       "call-duplicate"
+                       *conversation-interrupted-tool-output*)
+                      (function-call-output-item
+                       "call-duplicate"
+                       "first stale result")
+                      (function-call-output-item
+                       "call-duplicate"
+                       "second stale result")))
+                    nil)
+                (conversation-invariant-error ()
+                  t))
+              "replay tolerates only one stale result after a repair")
+             (test-assert
+              (handler-case
+                  (progn
+                    (conversation--tool-item-tables
+                     loaded
+                     (list
+                      (function-call-output-item
+                       "call-duplicate"
+                       *conversation-interrupted-tool-output*)
+                      call
+                      (function-call-output-item
+                       "call-duplicate"
+                       "late ordinary result")))
+                    nil)
+                (conversation-invariant-error ()
+                  t))
+              "duplicate tolerance requires the call before the repair")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-conversation-malformed-tool-projections () null)
 (defun test-conversation-malformed-tool-projections ()
   "Test replay rejects impossible durable tool-output projections."
@@ -659,6 +786,179 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(-> test-conversation--descriptor-read-byte (integer) integer)
+(defun test-conversation--descriptor-read-byte (descriptor)
+  "Read one synchronization byte from DESCRIPTOR and return the byte count."
+  (let ((buffer
+          (make-array
+           1
+           :element-type '(unsigned-byte 8)
+           :initial-element 0)))
+    (sb-sys:with-pinned-objects (buffer)
+      (sb-posix:read descriptor (sb-sys:vector-sap buffer) 1))))
+
+(-> test-conversation--descriptor-write-byte (integer) integer)
+(defun test-conversation--descriptor-write-byte (descriptor)
+  "Write one synchronization byte to DESCRIPTOR and return the byte count."
+  (let ((buffer
+          (make-array
+           1
+           :element-type '(unsigned-byte 8)
+           :initial-element 1)))
+    (sb-sys:with-pinned-objects (buffer)
+      (sb-posix:write descriptor (sb-sys:vector-sap buffer) 1))))
+
+(-> test-conversation--call-with-child-lease
+    (configuration string function)
+    null)
+(defun test-conversation--call-with-child-lease
+    (configuration identifier function)
+  "Call FUNCTION while a child process holds IDENTIFIER until explicitly released."
+  (multiple-value-bind (ready-read ready-write)
+      (sb-posix:pipe)
+    (multiple-value-bind (release-read release-write)
+        (sb-posix:pipe)
+      (let ((child-pid (sb-posix:fork))
+            (child-status nil))
+        (if (zerop child-pid)
+            (progn
+              (ignore-errors (sb-posix:close ready-read))
+              (ignore-errors (sb-posix:close release-write))
+              (handler-case
+                  (progn
+                    (conversation-lease-acquire configuration identifier)
+                    (test-conversation--descriptor-write-byte ready-write)
+                    (test-conversation--descriptor-read-byte release-read)
+                    ;; Deliberately bypass release to exercise kernel cleanup
+                    ;; after a dead conversation owner.
+                    (sb-posix:_exit 0))
+                (serious-condition ()
+                  (sb-posix:_exit 1))))
+            (progn
+              (sb-posix:close ready-write)
+              (sb-posix:close release-read)
+              (unwind-protect
+                   (progn
+                     (test-assert
+                      (= (test-conversation--descriptor-read-byte ready-read) 1)
+                      "the child process acquired its conversation lease")
+                     (funcall function))
+                (ignore-errors
+                  (test-conversation--descriptor-write-byte release-write))
+                (ignore-errors
+                  (sb-posix:close ready-read))
+                (ignore-errors
+                  (sb-posix:close release-write))
+                (multiple-value-bind (waited-pid status)
+                    (sb-posix:waitpid child-pid 0)
+                  (test-assert
+                   (= waited-pid child-pid)
+                   "the conversation lease holder was reaped")
+                  (setf child-status status)))
+              (test-assert
+               (and (sb-posix:wifexited child-status)
+                    (zerop (sb-posix:wexitstatus child-status)))
+               "the child conversation owner exited cleanly"))))))
+  nil)
+
+(-> test-conversation--child-can-acquire-lease-p
+    (configuration string)
+    boolean)
+(defun test-conversation--child-can-acquire-lease-p
+    (configuration identifier)
+  "Return true when a separate child process can claim IDENTIFIER."
+  (let ((child-pid (sb-posix:fork)))
+    (if (zerop child-pid)
+        (handler-case
+            (progn
+              (clrhash *conversation-leases*)
+              (conversation-lease-acquire configuration identifier)
+              (sb-posix:_exit 0))
+          (conversation-in-use ()
+            (sb-posix:_exit 2))
+          (serious-condition ()
+            (sb-posix:_exit 1)))
+        (multiple-value-bind (waited-pid status)
+            (sb-posix:waitpid child-pid 0)
+          (and (= waited-pid child-pid)
+               (sb-posix:wifexited status)
+               (zerop (sb-posix:wexitstatus status)))))))
+
+(-> test-conversation-process-lease () null)
+(defun test-conversation-process-lease ()
+  "Test live-owner exclusion and automatic lease release after process death."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (identifier "K8vQ2mp")
+         (conversation
+           (conversation-create configuration :identifier identifier)))
+    (unwind-protect
+         (progn
+           (configuration-ensure-directories configuration)
+           (conversation-append-user-message conversation "persist this session")
+           (test-conversation--call-with-child-lease
+            configuration
+            identifier
+            (lambda ()
+              (test-assert
+               (handler-case
+                   (let ((lease
+                           (conversation-lease-acquire
+                            configuration identifier)))
+                     (conversation-lease-release lease)
+                     nil)
+                 (conversation-in-use (condition)
+                   (and
+                    (string=
+                     (conversation-in-use-identifier condition)
+                     identifier)
+                    (equal
+                     (conversation-error-pathname condition)
+                     (conversation-pathname conversation)))))
+               "a second process cannot own the active conversation")
+              (test-assert
+               (and
+                (find
+                 (conversation-pathname conversation)
+                 (conversation-list configuration)
+                 :test #'equal)
+                (conversation-peek-header
+                 (conversation-pathname conversation)))
+               "conversation picker enumeration remains read-only while leased")
+              (let ((records-seen 0))
+                (conversation--map-records
+                 (conversation-pathname conversation)
+                 (lambda (record)
+                   (declare (ignore record))
+                   (incf records-seen)))
+                (test-assert
+                 (= records-seen 2)
+                 "history enumeration remains read-only while leased"))))
+           (let ((lease
+                   (conversation-lease-acquire configuration identifier)))
+             (unwind-protect
+                  (progn
+                    (test-assert
+                     (conversation-lease-held-p lease)
+                     "a dead process releases its conversation lease")
+                    (test-assert
+                     (handler-case
+                         (progn
+                           (conversation-lease-acquire
+                            configuration identifier)
+                           nil)
+                       (conversation-in-use ()
+                         t))
+                     "one process cannot acquire the same lease twice")
+                    (test-assert
+                     (not
+                      (test-conversation--child-can-acquire-lease-p
+                       configuration identifier))
+                     "the process-local guard retains the kernel lease"))
+               (conversation-lease-release lease))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
 (-> test-conversation-persistence () null)
 (defun test-conversation-persistence ()
   "Test append-only conversation projection and incomplete-tail recovery."
@@ -667,7 +967,9 @@
   (test-conversation-ephemeral-append-interruption)
   (test-conversation-malformed-tool-projections)
   (test-conversation-concurrent-appends)
+  (test-conversation-process-lease)
   (test-conversation-interrupted-tool-call)
+  (test-conversation-late-duplicate-tool-output)
   (let* ((configuration (test-configuration))
          (root (test-configuration-root configuration)))
     (unwind-protect

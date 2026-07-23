@@ -322,6 +322,7 @@
                       (when worker
                         (lisp-worker-manager-stop worker))
                    (setf worker-stopped-p t)))
+               (application-release-conversation-lease application)
                nil)
 
              (finish-shutdown ()

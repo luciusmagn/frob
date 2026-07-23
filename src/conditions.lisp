@@ -414,6 +414,20 @@
   ()
   (:documentation "Conversation persistence or replay violated a critical invariant."))
 
+(define-condition conversation-in-use (conversation-error)
+  ((identifier
+    :initarg :identifier
+    :reader conversation-in-use-identifier
+    :type non-empty-string
+    :documentation "The normalized identifier owned by another live process.")
+   (lease-pathname
+    :initarg :lease-pathname
+    :reader conversation-in-use-lease-pathname
+    :type pathname
+    :documentation "The process-shared lease file whose lock is held."))
+  (:documentation
+   "A live Autolith process already owns the requested conversation."))
+
 (define-condition conversation-identifier-error (autolith-error)
   ((value
     :initarg :value
