@@ -413,6 +413,11 @@ with =:blocking-p t= always remains synchronous. =job.list=, =job.get=,
 =job.wait=, and =job.cancel= expose only jobs owned by the requesting session as
 described above. Cancellation cascades from a job to its descendants.
 
+The primary provider loop executes tool calls in order, so concurrent child
+execution is expressed by one =task.run= batch or by detached calls. A
+synchronous batch waits only for its synchronous members. Detached members
+remain independently inspectable while the primary loop continues.
+
 Admission is bounded by batch and live-job limits. A bounded FIFO feeds a
 reusable worker pool with configured concurrency and an implementation maximum.
 Nested synchronous delegation must make progress even when every reusable
@@ -420,6 +425,14 @@ worker is occupied; it must not deadlock waiting for another worker. Runtime
 deadlines use one shared monitor rather than one watchdog thread per job.
 Terminal jobs have bounded retention, and terminal publication is single-writer
 even when completion, cancellation, and timeout race.
+
+The interactive UI projects every queued and running job into a bounded live
+strip immediately above the modeline. Rows remain in stable creation order,
+running rows animate on one coalesced cadence, and terminal jobs disappear.
+Task workers publish state only; the input reader performs terminal painting so
+concurrent progress cannot interleave escape sequences or force one repaint per
+event. This projection is ephemeral and never enters durable conversation
+history.
 
 Task workers and monitors are application runtime resources. Clean shutdown and
 conversation replacement cancel outstanding work and join the pool. Checkpoint

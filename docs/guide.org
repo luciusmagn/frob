@@ -413,6 +413,21 @@ a role with =:blocking-p t= always remains synchronous. Every child must end
 with exactly one =yield.submit= carrying =success=, =failed=, or =aborted=. A
 normal model stop without that yield is a failed child run.
 
+A synchronous =task.run= keeps the primary model at that tool call until every
+synchronous child finishes. Children in one batch may run concurrently through
+the reusable pool; separate provider tool calls are still executed in order.
+Detached children continue while the primary model proceeds, and the responsive
+composer remains usable in either case. The default pool admits up to eight
+running children, configurable with =AUTOLITH_TASK_MAX_CONCURRENCY= up to the
+implementation maximum of 32.
+
+Queued and running children appear in stable creation order in a colored live
+strip immediately above the modeline. Running children share a spinner updated
+four times per second, queued children have a static marker, and each row shows
+the child identity, role, detached state, and current tool or assignment. The
+strip shows at most eight children and summarizes any overflow. Terminal
+children disappear without entering conversation history.
+
 =job.list= lists visible jobs, =job.get= inspects one job and its progress,
 =job.wait= waits for a bounded interval, and =job.cancel= interrupts a queued or
 running job and its descendants. The primary agent sees only jobs owned by its
