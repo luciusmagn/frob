@@ -4,6 +4,7 @@
   :version "0.16.1"
   :serial t
   :depends-on (#:cl-base64
+               #:cl+ssl
                #:cl-colorist
                #:cl-exec-sandbox
                #:clifff
@@ -20,6 +21,7 @@
                #:sb-posix
                #:sbcl-workers
                #:sexp-store
+               #:usocket
                #:yason)
   :components ((:module "src"
                 :serial t

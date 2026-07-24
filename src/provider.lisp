@@ -633,6 +633,16 @@ delivery that the transport consumes only after a completed response."
       (setf (provider-rate-limits provider) snapshot))
     snapshot))
 
+(-> provider--close-response-stream (stream) null)
+(defun provider--close-response-stream (stream)
+  "Abortively close STREAM without allowing cleanup failure to escape."
+  (handler-case
+      (when (open-stream-p stream)
+        (close stream :abort t))
+    (error ()
+      nil))
+  nil)
+
 (-> provider--drain-error-body (stream) (option string))
 (defun provider--drain-error-body (stream)
   "Read and return a bounded error body from STREAM, closing it afterwards."
@@ -643,8 +653,7 @@ delivery that the transport consumes only after a completed response."
                (and (plusp end) (subseq buffer 0 end))))
          (error ()
            nil))
-    (when (open-stream-p stream)
-      (close stream))))
+    (provider--close-response-stream stream)))
 
 (-> provider--error-body-detail ((option string)) (option string))
 (defun provider--error-body-detail (body)
@@ -748,6 +757,48 @@ delivery that the transport consumes only after a completed response."
          :status nil
          :request-id (response-header headers "x-request-id")
          :response nil))
+
+(-> provider--signal-transport-failure (string &key (:retryable-p boolean)) null)
+(defun provider--signal-transport-failure (message &key retryable-p)
+  "Signal a credential-free provider transport failure described by MESSAGE."
+  (error (if retryable-p
+             'provider-transport-error
+             'provider-error)
+         :message message
+         :status nil
+         :request-id nil
+         :response nil))
+
+(-> provider--open-response-stream
+    (model-provider hash-table
+     &key (:credentials oauth-credentials)
+          (:conversation conversation))
+    *)
+(defun provider--open-response-stream
+    (provider request &key credentials conversation)
+  "Open one provider response and normalize dependency transport conditions."
+  (handler-case
+      (provider-open-response-stream
+       provider
+       request
+       :credentials credentials
+       :conversation conversation)
+    (ssl-error-syscall ()
+      (provider--signal-transport-failure
+       "The provider connection failed before a response was received."
+       :retryable-p t))
+    (socket-error ()
+      (provider--signal-transport-failure
+       "The provider connection failed before a response was received."
+       :retryable-p t))
+    (ns-error ()
+      (provider--signal-transport-failure
+       "The provider address could not be resolved."
+       :retryable-p t))
+    (cl+ssl-error ()
+      (provider--signal-transport-failure
+       "The provider TLS connection could not be established."
+       :retryable-p nil))))
 
 (-> provider--read-sse-data (stream t) t)
 (defun provider--read-sse-data (stream headers)
@@ -1028,7 +1079,7 @@ delivery that the transport consumes only after a completed response."
              :goal-context goal-context
              :compaction-p compaction-p)
           (multiple-value-bind (stream status raw-headers)
-              (provider-open-response-stream
+              (provider--open-response-stream
                provider
                request
                :credentials credentials
@@ -1065,8 +1116,7 @@ delivery that the transport consumes only after a completed response."
                       (unwind-protect
                            (provider--consume-stream
                             stream headers event-callback)
-                        (when (open-stream-p stream)
-                          (close stream)))))
+                        (provider--close-response-stream stream))))
                 (context-delivery-complete delivery)
                 result))))
         (dexador.error:http-request-unauthorized (condition)

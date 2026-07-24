@@ -4,6 +4,9 @@
                 #:base64-string-to-usb8-array
                 #:base64-string-to-string
                 #:usb8-array-to-base64-string)
+  (:import-from #:cl+ssl
+                #:cl+ssl-error
+                #:ssl-error-syscall)
   (:import-from #:cl-colorist
                 #:effective-color-level
                 #:indexed-color
@@ -187,6 +190,9 @@
                 #:url-encode-params)
   (:import-from #:serapeum
                 #:->)
+  (:import-from #:usocket
+                #:ns-error
+                #:socket-error)
   (:import-from #:sbcl-workers
                 #:+minimum-sbcl-worker-core-size+
                 #:+pristine-sbcl-worker-image-identifier+

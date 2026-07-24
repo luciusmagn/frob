@@ -272,6 +272,25 @@
           (incf (test-character-input-stream-position stream)))
         :eof)))
 
+(defclass test-failing-close-stream (test-character-input-stream)
+  ((close-abort-p
+    :initform nil
+    :accessor test-failing-close-stream-close-abort-p
+    :type boolean
+    :documentation "Whether the attempted close was abortive."))
+  (:documentation "A deterministic provider stream whose close operation fails."))
+
+(defmethod close ((stream test-failing-close-stream) &key abort)
+  "Record ABORT and inject the low-level TLS cleanup failure under test."
+  (setf (test-failing-close-stream-close-abort-p stream)
+        (not (null abort)))
+  (error 'ssl-error-syscall
+         :queue nil
+         :printed-queue nil
+         :ret -1
+         :handle nil
+         :syscall 'close))
+
 (-> test-provider-stream-decoding () null)
 (defun test-provider-stream-decoding ()
   "Test semantic stream decoding from a deterministic SSE fixture."
@@ -545,6 +564,195 @@
      "invalid prompt failures remain terminal")
     (test-assert (string= (provider-error-code condition) "invalid_prompt")
                  "terminal failures retain their structured error code"))
+  nil)
+
+(defclass test-transport-provider (codex-subscription-provider)
+  ((outcomes
+    :initarg :outcomes
+    :accessor test-transport-provider-outcomes
+    :type list
+    :documentation "The connection outcomes returned or signaled in order.")
+   (attempt-count
+    :initform 0
+    :accessor test-transport-provider-attempt-count
+    :type integer
+    :documentation "The number of response streams requested."))
+  (:documentation "A subscription provider injecting transport boundary outcomes."))
+
+(defmethod provider-open-response-stream
+    ((provider test-transport-provider)
+     (request hash-table)
+     &key credentials conversation)
+  "Return or signal the next scripted transport outcome for PROVIDER."
+  (declare (ignore request credentials conversation))
+  (incf (test-transport-provider-attempt-count provider))
+  (let ((outcome (pop (test-transport-provider-outcomes provider))))
+    (case outcome
+      (:syscall
+       (error 'ssl-error-syscall
+              :queue nil
+              :printed-queue nil
+              :ret -1
+              :handle nil
+              :syscall 'connect))
+      (:tls
+       (error 'cl+ssl-error))
+      (t
+       (values outcome 200 nil)))))
+
+(-> provider-tests--completed-sse-source (string) string)
+(defun provider-tests--completed-sse-source (response-id)
+  "Return a minimal successful SSE response carrying RESPONSE-ID."
+  (concatenate
+   'string
+   (test-sse-event-string
+    (json-object
+     "type" "response.created"
+     "response" (json-object "id" response-id)))
+   (test-sse-event-string
+    (json-object
+     "type" "response.completed"
+     "response" (json-object
+                  "id" response-id
+                  "usage" (json-object "input_tokens" 1))))))
+
+(-> provider-tests--transport-provider
+    (configuration list)
+    test-transport-provider)
+(defun provider-tests--transport-provider (configuration outcomes)
+  "Return a test provider yielding transport OUTCOMES."
+  (make-instance
+   'test-transport-provider
+   :configuration configuration
+   :credential-manager (credential-manager-create configuration)
+   :session-id (make-identifier)
+   :outcomes outcomes))
+
+(-> test-provider-transport-boundary () null)
+(defun test-provider-transport-boundary ()
+  "Test connection normalization and failure-proof provider stream cleanup."
+  (let* ((configuration (test-configuration))
+         (root (test-configuration-root configuration))
+         (conversation
+           (conversation-create configuration
+                                :identifier "provider-transport"))
+         (credentials (provider-tests--credentials configuration)))
+    (unwind-protect
+         (progn
+           (let* ((success-stream
+                    (make-instance
+                     'test-character-input-stream
+                     :source
+                     (provider-tests--completed-sse-source
+                      "transport-retry-success")))
+                  (provider
+                    (provider-tests--transport-provider
+                     configuration
+                     (list :syscall success-stream))))
+             (credential-source-save
+              (credential-manager-primary-source
+               (provider-credential-manager provider))
+              credentials)
+             (let ((*provider-stream-retry-sleep-function*
+                     (lambda (seconds)
+                       (declare (ignore seconds)))))
+               (let ((result
+                       (provider-stream-turn
+                        provider
+                        conversation
+                        :tool-namespaces #()
+                        :event-callback #'identity)))
+                 (test-assert
+                  (string= (provider-result-response-id result)
+                           "transport-retry-success")
+                  "an open-time TLS syscall failure reconnects successfully")
+                 (test-assert
+                  (= (test-transport-provider-attempt-count provider) 2)
+                  "a transient open failure consumes one bounded retry"))))
+           (let* ((stream
+                    (make-instance
+                     'test-failing-close-stream
+                     :source
+                     (provider-tests--completed-sse-source
+                      "close-failure-success")))
+                  (provider
+                    (provider-tests--transport-provider
+                     configuration
+                     (list stream))))
+             (credential-source-save
+              (credential-manager-primary-source
+               (provider-credential-manager provider))
+              credentials)
+             (let ((result
+                     (provider-attempt-turn
+                      provider
+                      conversation
+                      :tool-namespaces #()
+                      :event-callback #'identity
+                      :force-refresh nil
+                      :goal-context nil
+                      :compaction-p nil)))
+               (test-assert
+                (string= (provider-result-response-id result)
+                         "close-failure-success")
+                "cleanup failure cannot replace a completed provider result")
+               (test-assert
+                (test-failing-close-stream-close-abort-p stream)
+                "provider response streams close abortively")))
+           (let* ((stream
+                    (make-instance
+                     'test-failing-close-stream
+                     :source "data: {"))
+                  (provider
+                    (provider-tests--transport-provider
+                     configuration
+                     (list stream))))
+             (credential-source-save
+              (credential-manager-primary-source
+               (provider-credential-manager provider))
+              credentials)
+             (test-assert
+              (handler-case
+                  (progn
+                    (provider-attempt-turn
+                     provider
+                     conversation
+                     :tool-namespaces #()
+                     :event-callback #'identity
+                     :force-refresh nil
+                     :goal-context nil
+                     :compaction-p nil)
+                    nil)
+                (response-stream-error ()
+                  t))
+              "cleanup failure preserves the original stream interruption")
+             (test-assert
+              (test-failing-close-stream-close-abort-p stream)
+              "interrupted provider streams also close abortively"))
+           (let ((provider
+                   (provider-tests--transport-provider
+                    configuration
+                    (list :tls))))
+             (credential-source-save
+              (credential-manager-primary-source
+               (provider-credential-manager provider))
+              credentials)
+             (test-assert
+              (handler-case
+                  (progn
+                    (provider-attempt-turn
+                     provider
+                     conversation
+                     :tool-namespaces #()
+                     :event-callback #'identity
+                     :force-refresh nil
+                     :goal-context nil
+                     :compaction-p nil)
+                    nil)
+                (provider-error (condition)
+                  (not (typep condition 'provider-retryable-error))))
+              "non-transient TLS setup failures remain typed and terminal")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
 (-> provider-tests--credentials (configuration) oauth-credentials)

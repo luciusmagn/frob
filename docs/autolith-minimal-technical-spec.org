@@ -696,6 +696,11 @@ Examples include:
 Possible responses include refresh, retry, backoff, fallback, or a
 visible terminal error.
 
+Low-level DNS, socket, and TLS conditions are normalized at the provider
+transport boundary. Transient failures receive bounded reconnection attempts,
+and response-stream cleanup must not replace a completed result or its primary
+typed failure.
+
 ** 7.3 Fatal Control-Path Failure
 
 Recovery is required when the general agent path is no longer

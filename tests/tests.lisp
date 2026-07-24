@@ -119,6 +119,7 @@
     (test-provider-stream-decoding)
     (test-provider-stream-failures)
     (test-provider-stream-error-classification)
+    (test-provider-transport-boundary)
     (test-provider-credential-echo-containment)
     (test-provider-authentication-retries)
     (test-provider-stream-retries)

@@ -188,7 +188,12 @@
   ()
   (:documentation "A transient provider failure eligible for bounded retry."))
 
-(define-condition response-stream-error (provider-retryable-error)
+(define-condition provider-transport-error (provider-retryable-error)
+  ()
+  (:documentation
+   "A transient provider connection failure eligible for reconnection."))
+
+(define-condition response-stream-error (provider-transport-error)
   ()
   (:documentation "A provider stream ended without a valid terminal event."))
 
